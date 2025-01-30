@@ -1,0 +1,47 @@
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+
+model Package {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String
+  version     String
+  architecture String
+  description String?
+  maintainer  String?
+  depends     String?
+  path        String   // path in repository layout (e.g. "p/package/package_1.0_amd64.deb")
+  storageUrl  String   @map("storage_url") // URL in R2/storage
+  size        Int
+  md5         String
+  sha1        String
+  sha256      String
+  githubRepo  String   @map("github_repo")
+  githubOwner String   @map("github_owner")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@unique([name, version, architecture])
+  @@index([githubOwner, githubRepo])
+  @@index([name])
+  @@index([path])
+  @@map("packages")
+}
+
+model RepositoryMetadata {
+  id        String   @id @default(uuid()) @db.Uuid
+  type      String   // "Release" | "Packages"
+  content   String
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([type])
+  @@map("repository_metadata")
+}
