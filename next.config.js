@@ -1,10 +1,15 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  output: 'export',
-  eslint: {
-    ignoreDuringBuilds: true,
-  },
-  images: { unoptimized: true },
-};
+  rewrites: async () => [
+    {
+      source: '/dists/:path*',
+      destination: '/api/dists/:path*',
+    },
+    {
+      source: '/pool/:path*',
+      destination: '/api/pool/:path*',
+    }
+  ]
+}
 
-module.exports = nextConfig;
+module.exports = nextConfig
