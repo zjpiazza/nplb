@@ -1,230 +1,275 @@
 from pathlib import Path
-from typing import List
-import gnupg
+from typing import List, Dict
 import os
-from ..core.models import DebInfo
-from .debian import DebianService
-from .storage import S3StorageService
-from pydpkg import Dpkg
-import shutil
-import subprocess
+import tempfile
+from loguru import logger
+import requests
 import hashlib
+import gnupg
+from debian import debfile  # For parsing .deb files
 
 class RepositoryService:
     def __init__(
         self,
-        output_dir: str,
         repo_name: str,
         base_url: str,
-        storage: S3StorageService,
-        codename: str = "stable"
+        gpg_home: str = None,
+        gpg_key_email: str = None
     ):
-        self.output_dir = Path("/tmp")
+        """
+        Initialize repository service.
+        
+        Args:
+            repo_name: Name of repository (e.g. 'owner/repo')
+            base_url: Base URL for the repository
+            gpg_home: Path to GPG home directory
+            gpg_key_email: Email of GPG key to use for signing
+        """
         self.repo_name = repo_name
         self.base_url = base_url
-        self.codename = codename
-        self.architectures = ["amd64", "arm64"]
-        self.pool_dir = self.output_dir / "pool"
-        self.dists_dir = self.output_dir / "dists" / self.codename
-        self.debian_service = DebianService()
-        self.storage = storage
+        self.temp_dir = None
+        self.pool_dir = None
+        self.dists_dir = None
+        self.gpg_home = gpg_home
+        self.gpg_key_email = gpg_key_email
         
-        # Initialize GPG
-        self.gpg_home = Path("keys")
-        self.gpg = gnupg.GPG(gnupghome=str(self.gpg_home))
-        self.gpg.encoding = 'utf-8'
-
-    def init_repository(self):
-        """Initialize repository directory structure"""
-        for arch in self.architectures:
-            (self.dists_dir / "main" / f"binary-{arch}").mkdir(parents=True, exist_ok=True)
-        self.pool_dir.mkdir(parents=True, exist_ok=True)
-        self._setup_gpg()
-
-    def add_package(self, deb_path: str):
-        """Add a package to the repository"""
-        # Copy package to pool
-        deb_name = os.path.basename(deb_path)
-        shutil.copy2(deb_path, self.pool_dir / deb_name)
-
-    def generate_metadata(self):
-        """Generate repository metadata files"""
-        # Keep track of architectures that actually have packages
-        active_architectures = set()
+    def create_repository(self) -> str:
+        """
+        Create a new temporary repository structure.
         
-        for arch in self.architectures:
-            packages_dir = self.dists_dir / "main" / f"binary-{arch}"
-            packages_path = packages_dir / "Packages"
+        Returns:
+            Path to the temporary directory containing the repository
+        """
+        # Create temp directory that will persist until cleanup is called
+        self.temp_dir = tempfile.mkdtemp()
+        logger.info(f"Created temporary directory at {self.temp_dir}")
+        
+        # Create repository structure
+        self.pool_dir = os.path.join(self.temp_dir, "pool", "main")
+        self.dists_dir = os.path.join(self.temp_dir, "dists", "stable")
+        
+        os.makedirs(self.pool_dir, exist_ok=True)
+        os.makedirs(self.dists_dir, exist_ok=True)
+        
+        logger.info("Repository structure created")
+        return self.temp_dir
+        
+    def download_artifacts(self, releases: List[dict]) -> None:
+        """
+        Download release artifacts into pool directory.
+        
+        Args:
+            releases: List of GitHub release objects containing assets
+        """
+        if not self.pool_dir:
+            raise ValueError("Repository not initialized. Call create_repository() first.")
             
-            print(f"Processing architecture: {arch}")
-            
-            # Count packages before writing file
-            package_count = 0
-            for deb_file in self.pool_dir.glob('*.deb'):
-                pkg = Dpkg(str(deb_file))
-                if pkg.architecture == arch or pkg.architecture == 'all':
-                    package_count += 1
-            
-            # Skip this architecture if no packages found
-            if package_count == 0:
-                print(f"No packages found for architecture {arch}, skipping")
-                continue
-            
-            active_architectures.add(arch)
-            
-            with open(packages_path, 'w', encoding='utf-8') as f:
-                # Scan pool directory for .deb files
-                for deb_file in self.pool_dir.glob('*.deb'):
-                    pkg = Dpkg(str(deb_file))
-                    print(f"Found package: {pkg.package} ({pkg.architecture})")
+        for release in releases:
+            for asset in release.assets:
+                if not asset.name.endswith('.deb'):
+                    logger.debug(f"Skipping non-deb asset: {asset.name}")
+                    continue
                     
-                    # Skip if architecture doesn't match (unless it's 'all')
-                    if pkg.architecture != arch and pkg.architecture != 'all':
-                        print(f"Skipping {deb_file.name} - wrong architecture")
-                        continue
-                    
-                    print(f"Adding package: {pkg.package} version {pkg.version}")
-                    
-                    # Calculate the S3 path for the package
-                    s3_path = f"repos/{self.repo_name}/pool/{deb_file.name}"
-                    
-                    # Write package info in debian control file format
-                    f.write(f"Package: {pkg.package}\n")
-                    f.write(f"Version: {pkg.version}\n")
-                    f.write(f"Architecture: {pkg.architecture}\n")
-                    f.write(f"Maintainer: {pkg.maintainer}\n")
-                    if pkg.depends:
-                        f.write(f"Depends: {pkg.depends}\n")
-                    f.write(f"Filename: {s3_path}\n")  # Use S3 path
-                    f.write(f"Size: {deb_file.stat().st_size}\n")
-                    f.write(f"MD5sum: {pkg.md5}\n")
-                    f.write(f"SHA1: {pkg.sha1}\n")
-                    f.write(f"SHA256: {pkg.sha256}\n")
-                    if pkg.section:
-                        f.write(f"Section: {pkg.section}\n")
-                    if pkg.description:
-                        f.write(f"Description: {pkg.description}\n")
-                    f.write("\n")
+                dest_path = os.path.join(self.pool_dir, asset.name)
+                logger.info(f"Downloading {asset.name} to {dest_path}")
                 
-                print(f"Added {package_count} packages for {arch}")
-
-            # Generate compressed versions only if we wrote a Packages file
-            subprocess.run(["gzip", "-k", "-f", "-9", str(packages_path)], check=True)
-            subprocess.run(["xz", "-k", "-f", "-9", str(packages_path)], check=True)
-
-        # Update self.architectures to only include architectures with packages
-        self.architectures = sorted(active_architectures)
+                self._download_file(asset.download_url, dest_path)
+                
+    def _download_file(self, url: str, dest_path: str) -> None:
+        """
+        Download a file from a URL to a destination path.
         
-        # Generate Release files with updated architecture list
+        Args:
+            url: URL to download from
+            dest_path: Path to save the file to
+        """
+        response = requests.get(url, stream=True)
+        response.raise_for_status()
+        
+        with open(dest_path, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                f.write(chunk)
+                
+    def cleanup(self) -> None:
+        """Remove temporary directory and all contents."""
+        if self.temp_dir and os.path.exists(self.temp_dir):
+            import shutil
+            shutil.rmtree(self.temp_dir)
+            logger.info(f"Cleaned up temporary directory {self.temp_dir}")
+            self.temp_dir = None
+            self.pool_dir = None
+            self.dists_dir = None 
+
+    def generate_metadata(self) -> None:
+        """Generate repository metadata files."""
+        if not self.pool_dir or not self.dists_dir:
+            raise ValueError("Repository not initialized. Call create_repository() first.")
+            
+        # Create binary package directories
+        binary_dir = os.path.join(self.dists_dir, "main", "binary-amd64")
+        os.makedirs(binary_dir, exist_ok=True)
+        
+        # Generate Packages file
+        packages_path = os.path.join(binary_dir, "Packages")
+        self._generate_packages_file(packages_path)
+        
+        # Generate compressed versions
+        self._compress_file(packages_path)
+        
+        # Generate and sign Release file
         self._generate_release_file()
-
-    def _setup_gpg(self):
-        """Setup GPG signing key"""
-        self.gpg_home.mkdir(exist_ok=True)
         
-        # Check if we already have a key
-        existing_keys = self.gpg.list_keys(secret=True)
-        if not existing_keys:
-            # Generate a new key
-            key_input = self.gpg.gen_key_input(
-                key_type="RSA",
-                key_length=4096,
-                name_real="APT Repository",
-                name_email="repo@example.com",
-                expire_date=0,
-                no_protection=True
-            )
-            key = self.gpg.gen_key(key_input)
-            
-            # Export public key to repository
-            public_key = self.gpg.export_keys(key.fingerprint)
-            with open(self.output_dir / "key.gpg", 'w') as f:
-                f.write(public_key)
-        else:
-            # Export existing public key to repository
-            public_key = self.gpg.export_keys(existing_keys[0]['fingerprint'])
-            with open(self.output_dir / "key.gpg", 'w') as f:
-                f.write(public_key)
-
-    def _generate_release_file(self):
-        """Generate the Release file with required fields"""
-        release_path = self.dists_dir / "Release"
+    def _generate_packages_file(self, packages_path: str) -> None:
+        """Generate Packages file containing metadata for all .deb packages."""
+        logger.info("Generating Packages file")
         
-        # Get current time in exact format APT expects
-        from datetime import datetime, timezone
-        date = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S UTC")
+        with open(packages_path, 'w') as f:
+            for deb_file in os.listdir(self.pool_dir):
+                if not deb_file.endswith('.deb'):
+                    continue
+                    
+                deb_path = os.path.join(self.pool_dir, deb_file)
+                metadata = self._extract_deb_metadata(deb_path)
+                
+                # Write package metadata
+                f.write(str(metadata))
+                f.write('\n\n')
+                
+    def _generate_release_file(self) -> None:
+        """Generate and sign Release file."""
+        logger.info("Generating Release file")
         
-        release_content = f"""Origin: {self.repo_name}
-Label: {self.repo_name}
-Suite: {self.codename}
-Codename: {self.codename}
-Date: {date}
-Architectures: {' '.join(self.architectures)}
-Components: main
-Description: GitHub Release Repository for {self.repo_name}
-Acquire-By-Hash: yes"""
+        release_path = os.path.join(self.dists_dir, "Release")
         
-        # Collect all hash entries
-        sections = []
-        for hash_name in ['MD5Sum', 'SHA1', 'SHA256']:
-            entries = []
-            for component in ['main']:
-                for arch in sorted(self.architectures):
-                    for filename in [
-                        f"{component}/binary-{arch}/Packages",
-                        f"{component}/binary-{arch}/Packages.gz",
-                        f"{component}/binary-{arch}/Packages.xz"
-                    ]:
-                        filepath = self.dists_dir / filename
-                        if filepath.exists():
-                            size = filepath.stat().st_size
-                            with open(filepath, 'rb') as f:
-                                content = f.read()
-                                if hash_name == 'MD5Sum':
-                                    checksum = hashlib.md5(content).hexdigest()
-                                elif hash_name == 'SHA1':
-                                    checksum = hashlib.sha1(content).hexdigest()
-                                else:  # SHA256
-                                    checksum = hashlib.sha256(content).hexdigest()
-                            entries.append(f" {checksum} {size:12d} {filename}")
-            
-            if entries:
-                sections.append(f"\n{hash_name}:\n" + "\n".join(entries))
+        checksums: Dict[str, List[Dict]] = {
+            'MD5Sum': [],
+            'SHA1': [],
+            'SHA256': []
+        }
         
-        release_content += "".join(sections)
+        # Calculate checksums for all files in dists/
+        for root, _, files in os.walk(self.dists_dir):
+            for filename in files:
+                if filename in ['Release', 'Release.gpg']:
+                    continue
+                    
+                filepath = os.path.join(root, filename)
+                relpath = os.path.relpath(filepath, self.dists_dir)
+                size = os.path.getsize(filepath)
+                
+                with open(filepath, 'rb') as f:
+                    data = f.read()
+                    checksums['MD5Sum'].append({
+                        'hash': hashlib.md5(data).hexdigest(),
+                        'size': size,
+                        'path': relpath
+                    })
+                    checksums['SHA1'].append({
+                        'hash': hashlib.sha1(data).hexdigest(),
+                        'size': size,
+                        'path': relpath
+                    })
+                    checksums['SHA256'].append({
+                        'hash': hashlib.sha256(data).hexdigest(),
+                        'size': size,
+                        'path': relpath
+                    })
         
         # Write Release file
-        with open(release_path, 'w', encoding='utf-8') as f:
-            f.write(release_content)
+        with open(release_path, 'w') as f:
+            f.write(f"Origin: {self.repo_name}\n")
+            f.write(f"Label: {self.repo_name} Repository\n")
+            f.write("Suite: stable\n")
+            f.write("Codename: stable\n")
+            f.write("Components: main\n")
+            f.write("Architectures: amd64\n")
+            f.write(f"Date: {self._get_current_date()}\n")
+            
+            # Write checksums
+            for algo in ['MD5Sum', 'SHA1', 'SHA256']:
+                f.write(f"{algo}:\n")
+                for entry in sorted(checksums[algo], key=lambda x: x['path']):
+                    f.write(f" {entry['hash']} {entry['size']} {entry['path']}\n")
         
-        # Generate InRelease (clearsigned Release)
-        with open(release_path, 'rb') as f:
-            signed_data = self.gpg.sign(
-                f.read(),
-                keyid='repo@example.com',
-                clearsign=True,
-                detach=False
-            )
-            with open(self.dists_dir / 'InRelease', 'w') as sf:
-                sf.write(str(signed_data))
+        logger.info("Release file generated")
         
-        # Generate Release.gpg (detached signature)
+        # Sign Release file if GPG is configured
+        if self.gpg_home and self.gpg_key_email:
+            self._sign_release()
+            
+    def _sign_release(self) -> None:
+        """Sign the Release file with GPG."""
+        logger.info("Signing Release file")
+        
+        gpg = gnupg.GPG(gnupghome=self.gpg_home)
+        release_path = os.path.join(self.dists_dir, "Release")
+        
         with open(release_path, 'rb') as f:
-            detached_sig = self.gpg.sign(
-                f.read(),
-                keyid='repo@example.com',
-                detach=True
+            signed_data = gpg.sign_file(
+                f,
+                keyid=self.gpg_key_email,
+                detach=True,
+                output=os.path.join(self.dists_dir, "Release.gpg")
             )
-            with open(str(release_path) + '.gpg', 'w') as sf:
-                sf.write(str(detached_sig))
+            
+            if not signed_data:
+                raise ValueError("Failed to sign Release file")
+                
+    def _compress_file(self, filepath: str) -> None:
+        """Create compressed versions of a file (gz and xz)."""
+        import gzip
+        import lzma
+        
+        # Create gzip version
+        gzip_path = filepath + '.gz'
+        with open(filepath, 'rb') as f_in:
+            with gzip.open(gzip_path, 'wb') as f_out:
+                f_out.write(f_in.read())
+        logger.debug(f"Created gzip compressed file: {gzip_path}")
+        
+        # Create xz version
+        xz_path = filepath + '.xz'
+        with open(filepath, 'rb') as f_in:
+            with lzma.open(xz_path, 'wb') as f_out:
+                f_out.write(f_in.read())
+        logger.debug(f"Created xz compressed file: {xz_path}")
+        
+    @staticmethod
+    def _get_current_date() -> str:
+        """Get current date in Debian repository format."""
+        from datetime import datetime, timezone
+        return datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S %Z")
 
-    def publish(self):
-        """Upload the repository to S3"""
-        # First, clean up any existing content
-        self.storage.delete_prefix(f"repos/{self.repo_name}")
+    def _extract_deb_metadata(self, deb_path: str) -> debfile.DebControl:
+        """
+        Extract metadata from a .deb file.
         
-        # Upload the entire repository
-        self.storage.upload_directory(
-            self.output_dir,
-            prefix=f"repos/{self.repo_name}"
-        ) 
+        Args:
+            deb_path: Path to the .deb file
+            
+        Returns:
+            DebControl object containing package metadata
+        """
+        # Parse package using python-debian
+        deb = debfile.DebFile(deb_path)
+        control_data = deb.control.debcontrol()
+        
+        # Add additional required fields
+        filename = os.path.basename(deb_path)
+        size = os.path.getsize(deb_path)
+        
+        # Calculate checksums
+        with open(deb_path, 'rb') as f:
+            data = f.read()
+            md5sum = hashlib.md5(data).hexdigest()
+            sha1 = hashlib.sha1(data).hexdigest()
+            sha256 = hashlib.sha256(data).hexdigest()
+        
+        # Add fields required for the Packages file
+        control_data['Filename'] = os.path.join('pool/main', filename)
+        control_data['Size'] = str(size)
+        control_data['MD5sum'] = md5sum
+        control_data['SHA1'] = sha1
+        control_data['SHA256'] = sha256
+        
+        return control_data 

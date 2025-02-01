@@ -6,11 +6,11 @@ class GitHubService:
     def __init__(self, github_token: str):
         self.client = Github(github_token)
     
-    def get_releases(self, owner: str, repo: str) -> List[Release]:
+    def get_releases(self, owner: str, repo: str, limit: int = 1) -> List[Release]:
         repo = self.client.get_repo(f"{owner}/{repo}")
         releases = []
         
-        for release in repo.get_releases():
+        for release in repo.get_releases()[:limit]:
             assets = []
             for asset in release.get_assets():
                 if asset.name.endswith('.deb'):
@@ -28,4 +28,4 @@ class GitHubService:
                     assets=assets
                 ))
         
-        return releases 
+        return releases
