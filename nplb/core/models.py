@@ -22,4 +22,5 @@ class DebInfo(BaseModel):
 
 class RepositoryResponse(BaseModel):
     status: str
-    message: str 
+    message: str
+    job_id: str

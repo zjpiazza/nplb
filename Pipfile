@@ -15,6 +15,10 @@ pydantic-settings = "*"
 boto3 = "*"
 python-gnupg = "*"
 requests-cache = "*"
+rq = "*"
+redis = "*"
+fakeredis = "*"
+loguru = "*"
 
 [dev-packages]
 
