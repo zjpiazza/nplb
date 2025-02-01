@@ -7,19 +7,18 @@ class Settings(BaseSettings):
     output_dir: str = "build"
     default_codename: str = "stable"
     
-    # R2 Configuration
-    r2_account_id: str
-    r2_access_key_id: str
-    r2_secret_access_key: str
-    r2_bucket_name: str
-    r2_bucket_region: str = "auto"
-    r2_public_url: str = None  # Will default to {bucket_name}.r2.dev if not set
+    # S3 Configuration
+    aws_access_key_id: str
+    aws_secret_access_key: str
+    aws_bucket_name: str
+    aws_region: str = "us-east-1"
+    aws_public_url: str | None = None
     
     @property
     def storage_url(self) -> str:
-        if self.r2_public_url:
-            return self.r2_public_url
-        return f"https://{self.r2_bucket_name}.r2.dev"
+        if self.aws_public_url:
+            return self.aws_public_url
+        return f"https://{self.aws_bucket_name}.s3.{self.aws_region}.amazonaws.com"
     
     class Config:
         env_file = ".env"

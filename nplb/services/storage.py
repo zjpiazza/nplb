@@ -6,19 +6,17 @@ import os
 from botocore.exceptions import ClientError
 from time import sleep
 
-class R2StorageService:
+class S3StorageService:
     def __init__(
         self,
-        account_id: str,
         access_key_id: str,
         secret_access_key: str,
         bucket_name: str,
-        region: str = "auto"
+        region: str
     ):
         self.bucket_name = bucket_name
         self.client = boto3.client(
             's3',
-            endpoint_url=f'https://{account_id}.r2.cloudflarestorage.com',
             aws_access_key_id=access_key_id,
             aws_secret_access_key=secret_access_key,
             region_name=region
@@ -29,8 +27,8 @@ class R2StorageService:
         return content_type or 'application/octet-stream'
 
     def upload_file(self, file_path: str | Path, key: str, max_retries: int = 5) -> str:
-        """Upload a single file to R2"""
-        file_path = Path(file_path).resolve()  # Convert to absolute path
+        """Upload a single file to S3"""
+        file_path = Path(file_path).resolve()
         print(f"Uploading {file_path} to {key}")
         extra_args = {
             'ContentType': self._get_content_type(str(file_path))
@@ -57,16 +55,14 @@ class R2StorageService:
                 error_message = e.response.get('Error', {}).get('Message', '')
                 print(f"Error uploading file (attempt {retry_count + 1}): {error_code} - {error_message}")
                 
-                if error_code == '500':
+                if error_code in ['500', 'InternalError']:
                     retry_count += 1
                     if retry_count < max_retries:
-                        # Exponential backoff: wait longer between each retry
                         sleep_time = 2 ** retry_count
                         print(f"Retrying in {sleep_time} seconds...")
                         sleep(sleep_time)
                     continue
                 else:
-                    # If it's not a 500 error, raise immediately
                     raise
             except Exception as e:
                 print(f"Unexpected error uploading file: {str(e)}")
@@ -75,7 +71,7 @@ class R2StorageService:
         raise Exception(f"Failed to upload {file_path} after {max_retries} attempts")
 
     def upload_directory(self, directory: str | Path, prefix: str = "") -> List[str]:
-        """Upload an entire directory to R2"""
+        """Upload an entire directory to S3"""
         directory = Path(directory)
         uploaded_files = []
         
