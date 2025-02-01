@@ -10,20 +10,7 @@ from rq import Queue
 from rq.job import Job
 from redis import Redis
 
-# def get_queue():
-#     return Queue(connection=Redis())
-
-def test_task():
-    logger.info("Testing task")
-    return "Hello World"
-
-
 router = APIRouter()
-@router.get("/test")
-def test():
-    redis = Redis()
-    redis.set("test", "Hello World")
-    return "Hello World"
 
 @router.post("/build")
 def build_repository(
@@ -32,8 +19,9 @@ def build_repository(
     limit: int = 1,
     settings: Settings = Depends(get_settings),
 ):
+    # TODO: Use proper dependency injection
+    q = Queue(connection=Redis(settings.redis_host, settings.redis_port, settings.redis_password, settings.redis_db))
     logger.info("Getting queue")
-    q = Queue(connection=Redis(), default_timeout=5)
     try:
         logger.info("Creating GitHub service")
         github_service = GitHubService(settings.github_token)
@@ -43,10 +31,8 @@ def build_repository(
             base_url=settings.storage_url,
         )
         logger.info("Enqueuing job")
-        job = q.enqueue(test_task)
-        # job = q.enqueue(build_repository_task, owner, repo, limit, github_service, repo_service)
+        job = q.enqueue(build_repository_task, owner, repo, limit, github_service, repo_service)
         logger.info("Building repository")
-        build_repository_task(owner, repo, limit, github_service, repo_service)
         logger.info("Repository built")
         return RepositoryResponse(
             status="success",

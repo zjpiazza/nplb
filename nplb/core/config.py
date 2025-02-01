@@ -17,6 +17,13 @@ class Settings(BaseSettings):
     # GPG Configuration
     gpg_home: str = "keys"  # Default location for GPG keys
     gpg_key_email: str | None = None  # Email associated with signing key
+
+
+    # Redis Configuration
+    redis_host: str = "redis"
+    redis_port: int = 6379
+    redis_password: str = ""
+    redis_db: int = 0
     
     @property
     def storage_url(self) -> str:

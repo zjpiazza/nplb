@@ -17,6 +17,8 @@ python-gnupg = "*"
 requests-cache = "*"
 rq = "*"
 redis = "*"
+fakeredis = "*"
+loguru = "*"
 
 [dev-packages]
 
