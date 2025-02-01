@@ -4,7 +4,7 @@ import gnupg
 import os
 from ..core.models import DebInfo
 from .debian import DebianService
-from .storage import R2StorageService
+from .storage import S3StorageService
 from pydpkg import Dpkg
 import shutil
 import subprocess
@@ -16,10 +16,10 @@ class RepositoryService:
         output_dir: str,
         repo_name: str,
         base_url: str,
-        storage: R2StorageService,
+        storage: S3StorageService,
         codename: str = "stable"
     ):
-        self.output_dir = Path(output_dir)
+        self.output_dir = Path("/tmp")
         self.repo_name = repo_name
         self.base_url = base_url
         self.codename = codename
@@ -85,8 +85,8 @@ class RepositoryService:
                     
                     print(f"Adding package: {pkg.package} version {pkg.version}")
                     
-                    # Calculate the R2 path for the package
-                    r2_path = f"repos/{self.repo_name}/pool/{deb_file.name}"
+                    # Calculate the S3 path for the package
+                    s3_path = f"repos/{self.repo_name}/pool/{deb_file.name}"
                     
                     # Write package info in debian control file format
                     f.write(f"Package: {pkg.package}\n")
@@ -95,7 +95,7 @@ class RepositoryService:
                     f.write(f"Maintainer: {pkg.maintainer}\n")
                     if pkg.depends:
                         f.write(f"Depends: {pkg.depends}\n")
-                    f.write(f"Filename: {r2_path}\n")  # Use R2 path
+                    f.write(f"Filename: {s3_path}\n")  # Use S3 path
                     f.write(f"Size: {deb_file.stat().st_size}\n")
                     f.write(f"MD5sum: {pkg.md5}\n")
                     f.write(f"SHA1: {pkg.sha1}\n")
@@ -219,7 +219,7 @@ Acquire-By-Hash: yes"""
                 sf.write(str(detached_sig))
 
     def publish(self):
-        """Upload the repository to R2"""
+        """Upload the repository to S3"""
         # First, clean up any existing content
         self.storage.delete_prefix(f"repos/{self.repo_name}")
         

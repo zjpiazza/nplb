@@ -2,8 +2,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from ...core.config import get_settings, Settings
 from ...services.github import GitHubService
 from ...services.repository import RepositoryService
-from ...services.storage import R2StorageService
+from ...services.storage import S3StorageService
 from ...core.models import RepositoryResponse
+import uuid
 import tempfile
 import os
 
@@ -13,7 +14,7 @@ router = APIRouter()
 async def upload_file(
     settings: Settings = Depends(get_settings)
 ):
-    storage = R2StorageService(settings.r2_account_id, settings.r2_access_key_id, settings.r2_secret_access_key, settings.r2_bucket_name)
+    storage = S3StorageService(settings.aws_access_key_id, settings.aws_secret_access_key, settings.s3_bucket_name)
     storage.upload_file(file_path="test/file.txt", key="test/file.txt")
     return {"message": "File uploaded successfully"}
 
@@ -25,17 +26,18 @@ async def build_repository(
 ):
     github_service = GitHubService(settings.github_token)
     releases = github_service.get_releases(owner, repo)
-    
+
+
     # Initialize R2 storage
-    storage = R2StorageService(
-        account_id=settings.r2_account_id,
-        access_key_id=settings.r2_access_key_id,
-        secret_access_key=settings.r2_secret_access_key,
-        bucket_name=settings.r2_bucket_name
+    storage = S3StorageService(
+        access_key_id=settings.aws_access_key_id,
+        secret_access_key=settings.aws_secret_access_key,
+        bucket_name=settings.aws_bucket_name,
+        region=settings.aws_region
     )
     
     repo_service = RepositoryService(
-        output_dir=settings.output_dir,
+        output_dir=f"/{settings.output_dir}/{uuid.uuid4()}",
         repo_name=f"{owner}/{repo}",
         base_url=settings.storage_url,
         storage=storage
