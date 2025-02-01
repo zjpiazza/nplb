@@ -14,6 +14,10 @@ class Settings(BaseSettings):
     aws_region: str = "us-east-1"
     aws_public_url: str | None = None
     
+    # GPG Configuration
+    gpg_home: str = "keys"  # Default location for GPG keys
+    gpg_key_email: str | None = None  # Email associated with signing key
+    
     @property
     def storage_url(self) -> str:
         if self.aws_public_url:
