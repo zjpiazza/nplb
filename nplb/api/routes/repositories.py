@@ -4,55 +4,59 @@ from ...services.github import GitHubService
 from ...services.repository import RepositoryService
 from ...core.models import RepositoryResponse
 from loguru import logger
+from ...tasks.build import build_repository_task
+from ...tasks.exceptions import BuildRepositoryError
+from rq import Queue
+from rq.job import Job
+from redis import Redis
+
+# def get_queue():
+#     return Queue(connection=Redis())
+
+def test_task():
+    logger.info("Testing task")
+    return "Hello World"
+
 
 router = APIRouter()
+@router.get("/test")
+def test():
+    redis = Redis()
+    redis.set("test", "Hello World")
+    return "Hello World"
 
-@router.post("/repositories/{owner}/{repo}/build", response_model=RepositoryResponse)
-async def build_repository(
+@router.post("/build")
+def build_repository(
     owner: str,
     repo: str,
     limit: int = 1,
-    settings: Settings = Depends(get_settings)
+    settings: Settings = Depends(get_settings),
 ):
-    """Build a Debian repository from GitHub releases."""
+    logger.info("Getting queue")
+    q = Queue(connection=Redis(), default_timeout=5)
     try:
-        # Initialize services
+        logger.info("Creating GitHub service")
         github_service = GitHubService(settings.github_token)
+        logger.info("Creating Repository service")
         repo_service = RepositoryService(
             repo_name=f"{owner}/{repo}",
             base_url=settings.storage_url,
         )
-        
-        # Get repository releases
-        releases = github_service.get_releases(owner, repo, limit)
-        if not releases:
-            raise ValueError(f"No releases found for {owner}/{repo}")
-        
-        try:
-            # Create repository structure
-            repo_service.create_repository()
-            
-            # Download release artifacts
-            repo_service.download_artifacts(releases)
-            
-            # Generate metadata
-            repo_service.generate_metadata()
-            
-            return RepositoryResponse(
-                status="success",
-                message=f"Repository built successfully for {owner}/{repo}"
-            )
-            
-        finally:
-            # Clean up temporary files
-            pass
-            repo_service.cleanup()
-            
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error(f"Failed to build repository: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to build repository: {str(e)}"
+        logger.info("Enqueuing job")
+        job = q.enqueue(test_task)
+        # job = q.enqueue(build_repository_task, owner, repo, limit, github_service, repo_service)
+        logger.info("Building repository")
+        build_repository_task(owner, repo, limit, github_service, repo_service)
+        logger.info("Repository built")
+        return RepositoryResponse(
+            status="success",
+            message=f"Job {owner}/{repo} queued",
+            job_id=job.id
         )
+    except BuildRepositoryError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+
+def get_job(job_id: str):
+    job = Job.fetch(job_id, connection=Redis())
+    return job.result
