@@ -1,0 +1,15 @@
+version: 1.0
+runtime: python311
+build:
+  commands:
+    build:
+      - echo "Build command..."
+run:
+  runtime-version: 3.11
+  pre-run:
+    - echo "Installing dependencies..."
+    - pip3 install pipenv
+    - pipenv install --system --deploy
+  command: pipenv run uvicorn nplb:app --host 0.0.0.0 --port 8080
+  network:
+    port: 8080
