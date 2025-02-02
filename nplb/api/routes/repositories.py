@@ -1,48 +1,68 @@
-from fastapi import APIRouter, Depends, HTTPException
-from ...core.config import get_settings, Settings
+from chalice import Blueprint, Response
 from ...services.github import GitHubService
 from ...services.repository import RepositoryService
-from ...core.models import RepositoryResponse
-from loguru import logger
-from ...tasks.build import build_repository_task
 from ...tasks.exceptions import BuildRepositoryError
-from rq import Queue
-from rq.job import Job
-from redis import Redis
+from ...utils.resources import ResourceProvider
+from loguru import logger
+import json
 
-router = APIRouter()
+# Create blueprint
+blueprint = Blueprint(__name__)
+resources = ResourceProvider.get_resources()
 
-@router.post("/build")
-def build_repository(
-    owner: str,
-    repo: str,
-    limit: int = 1,
-    settings: Settings = Depends(get_settings),
-):
-    # TODO: Use proper dependency injection
-    q = Queue(connection=Redis(settings.redis_host, settings.redis_port, settings.redis_password, settings.redis_db))
-    logger.info("Getting queue")
+@blueprint.route('/list', methods=['GET'])
+def list_repositories():
+    # Get repositories from DynamoDB
+    response = resources.repository_table.scan()
+    return {'repositories': response.get('Items', [])}
+
+@blueprint.route('/{repo_id}', methods=['GET'])
+def get_repository(repo_id):
+    response = resources.repository_table.get_item(
+        Key={'id': repo_id}
+    )
+    if 'Item' not in response:
+        return Response(
+            body={'error': 'Repository not found'},
+            status_code=404
+        )
+    return response['Item']
+
+@blueprint.route('/build', methods=['POST'])
+def build_repository():
+    request = blueprint.current_request
+    payload = request.json_body
+    owner = payload.get('owner')
+    repo = payload.get('repo')
+    limit = payload.get('limit', 1)
+
+    # Validate input
+    if not owner or not repo:
+        return Response(
+            body={'error': 'owner and repo are required'},
+            status_code=400
+        )
+
     try:
-        logger.info("Creating GitHub service")
-        github_service = GitHubService(settings.github_token)
-        logger.info("Creating Repository service")
-        repo_service = RepositoryService(
-            repo_name=f"{owner}/{repo}",
-            base_url=settings.storage_url,
+        # Queue the build job
+        message = {
+            'owner': owner,
+            'repo': repo,
+            'limit': limit
+        }
+        
+        response = resources.sqs.send_message(
+            QueueUrl=resources.build_queue,
+            MessageBody=json.dumps(message)
         )
-        logger.info("Enqueuing job")
-        job = q.enqueue(build_repository_task, owner, repo, limit, github_service, repo_service)
-        logger.info("Building repository")
-        logger.info("Repository built")
-        return RepositoryResponse(
-            status="success",
-            message=f"Job {owner}/{repo} queued",
-            job_id=job.id
-        )
-    except BuildRepositoryError as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    
 
-def get_job(job_id: str):
-    job = Job.fetch(job_id, connection=Redis())
-    return job.result
+        return {
+            'status': 'success',
+            'message': f'Build queued for {owner}/{repo}',
+            'job_id': response['MessageId']
+        }
+    except BuildRepositoryError as e:
+        return Response(
+            body={'error': str(e)},
+            status_code=500
+        )

@@ -19,6 +19,7 @@ rq = "*"
 redis = "*"
 fakeredis = "*"
 loguru = "*"
+chalice = "*"
 
 [dev-packages]
 

@@ -1,0 +1,37 @@
+{
+  "version": "2.0",
+  "app_name": "nplb",
+  "stages": {
+    "dev": {
+      "api_gateway_stage": "api",
+      "environment_variables": {
+        "GITHUB_TOKEN": "",
+        "STORAGE_URL": "",
+        "REPOSITORY_TABLE": "repositories",
+        "BUILD_QUEUE_NAME": "repository-builds",
+        "LOG_LEVEL": "INFO"
+      },
+      "iam_role_arn": "arn:aws:iam::YOUR_ACCOUNT_ID:role/nplb-role",
+      "lambda_functions": {
+        "worker": {
+          "lambda_timeout": 300,
+          "lambda_memory_size": 512,
+          "environment_variables": {
+            "GITHUB_TOKEN": "",
+            "STORAGE_URL": "",
+            "REPOSITORY_TABLE": "repositories",
+            "BUILD_QUEUE_NAME": "repository-builds",
+            "LOG_LEVEL": "INFO"
+          }
+        }
+      }
+    }
+  },
+  "local": {
+    "host": "127.0.0.1",
+    "port": 8080,
+    "auth": {
+      "enabled": false
+    }
+  }
+} 

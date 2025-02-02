@@ -1,17 +1,8 @@
-from fastapi import FastAPI
-from .api.routes import repositories
-import uvicorn
-from requests_cache import DO_NOT_CACHE, get_cache, install_cache
+from chalice import Chalice, AuthResponse
+from requests_cache import DO_NOT_CACHE, install_cache
+from .api.routes.repositories import blueprint as repositories
 
-app = FastAPI(
-    title="NPLB - APT Repository Generator",
-    description="API for generating APT repositories from GitHub releases",
-    version="1.0.0",
-    prefix="/api/v1"
-)
-
-app.include_router(repositories.router, prefix="/repositories", tags=["repositories"])
-
+# Initialize request cache
 install_cache(
     cache_control=True,
     urls_expire_after={
@@ -20,5 +11,16 @@ install_cache(
     },
 )
 
-if __name__ == "__main__":
-    uvicorn.run("nplb.main:app", host="0.0.0.0", port=8080, reload=True)
+# Initialize Chalice app
+app = Chalice(app_name='nplb')
+
+# Create a simple authorizer that always allows access
+@app.authorizer()
+def basic_auth(auth_request):
+    return AuthResponse(routes=['*'], principal_id='user')
+
+# Register blueprints
+app.register_blueprint(repositories, url_prefix='/repositories')
+
+# Add CORS configuration
+app.cors = True
