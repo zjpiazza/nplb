@@ -12,9 +12,20 @@ resources = ResourceProvider.get_resources()
 
 @blueprint.route('/list', methods=['GET'])
 def list_repositories():
-    # Get repositories from DynamoDB
-    response = resources.repository_table.scan()
-    return {'repositories': response.get('Items', [])}
+    try:
+        # Get repositories from DynamoDB
+        response = resources.repository_table.scan()
+        return {'repositories': response.get('Items', [])}
+    except resources.repository_table.meta.client.exceptions.ResourceNotFoundException:
+        # Return empty list if table doesn't exist yet
+        logger.warning("Repository table does not exist yet")
+        return {'repositories': []}
+    except Exception as e:
+        logger.error(f"Error scanning repository table: {str(e)}")
+        return Response(
+            body={'error': 'Internal server error'},
+            status_code=500
+        )
 
 @blueprint.route('/{repo_id}', methods=['GET'])
 def get_repository(repo_id):
