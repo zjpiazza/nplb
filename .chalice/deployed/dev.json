@@ -1,0 +1,36 @@
+{
+  "resources": [
+    {
+      "name": "default-role",
+      "resource_type": "iam_role",
+      "role_arn": "arn:aws:iam::000000000000:role/nplb-dev",
+      "role_name": "nplb-dev"
+    },
+    {
+      "name": "build_handler",
+      "resource_type": "lambda_function",
+      "lambda_arn": "arn:aws:lambda:us-east-1:000000000000:function:nplb-dev-build_handler"
+    },
+    {
+      "name": "build_handler-sqs-event-source",
+      "resource_type": "sqs_event",
+      "queue_arn": "arn:aws:sqs:us-east-1:000000000000:builds",
+      "event_uuid": "b0412ef5-3679-4c27-8800-a28de11d0649",
+      "queue": "builds",
+      "lambda_arn": "arn:aws:lambda:us-east-1:000000000000:function:nplb-dev-build_handler"
+    },
+    {
+      "name": "api_handler",
+      "resource_type": "lambda_function",
+      "lambda_arn": "arn:aws:lambda:us-east-1:000000000000:function:nplb-dev"
+    },
+    {
+      "name": "rest_api",
+      "resource_type": "rest_api",
+      "rest_api_id": "ipkc0vd1wo",
+      "rest_api_url": "https://ipkc0vd1wo.execute-api.us-east-1.amazonaws.com/api/"
+    }
+  ],
+  "schema_version": "2.0",
+  "backend": "api"
+}

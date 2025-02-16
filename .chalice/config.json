@@ -5,33 +5,22 @@
     "dev": {
       "api_gateway_stage": "api",
       "environment_variables": {
-        "GITHUB_TOKEN": "",
-        "STORAGE_URL": "",
-        "REPOSITORY_TABLE": "repositories",
-        "BUILD_QUEUE_NAME": "repository-builds",
-        "LOG_LEVEL": "INFO"
+        "AWS_ENDPOINT_URL": "http://localhost:4566"
       },
-      "iam_role_arn": "arn:aws:iam::YOUR_ACCOUNT_ID:role/nplb-role",
-      "lambda_functions": {
-        "worker": {
-          "lambda_timeout": 300,
-          "lambda_memory_size": 512,
-          "environment_variables": {
-            "GITHUB_TOKEN": "",
-            "STORAGE_URL": "",
-            "REPOSITORY_TABLE": "repositories",
-            "BUILD_QUEUE_NAME": "repository-builds",
-            "LOG_LEVEL": "INFO"
-          }
+      "resources": [
+        {
+          "name": "builds-queue",
+          "resource_type": "sqs",
+          "queue_name": "builds"
         }
-      }
-    }
-  },
-  "local": {
-    "host": "127.0.0.1",
-    "port": 8080,
-    "auth": {
-      "enabled": false
+      ],
+      "events": [
+        {
+          "source": "builds-queue",
+          "name": "builds-queue-event",
+          "handler": "app.build_handler"
+        }
+      ]
     }
   }
-} 
+}

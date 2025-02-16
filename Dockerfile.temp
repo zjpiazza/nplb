@@ -1,0 +1,11 @@
+FROM amazonlinux:2023
+
+# Update package lists and install zstd
+RUN dnf update -y && \
+    dnf install -y zstd && \
+    dnf clean all
+
+# Create directory for files
+RUN mkdir -p /tmp/zstd-files
+
+CMD ["sleep", "infinity"]
