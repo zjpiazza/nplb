@@ -1,0 +1,6 @@
+# This is a placeholder for build or deployment scripts.
+# You can add scripts here to:
+# - Build the Go binaries
+# - Build Docker images
+# - Run tests
+# - Deploy the application

@@ -1,2 +1,0 @@
-class BuildRepositoryError(Exception):
-    pass

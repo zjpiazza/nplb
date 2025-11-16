@@ -1,5 +1,72 @@
 # NPLB - Golang Migration Plan
 
+## Table of Contents
+
+1. [Executive Summary](#executive-summary)
+2. [Project Overview & Architecture Analysis](#1-project-overview--architecture-analysis)
+   - [Current System Architecture](#11-current-system-architecture)
+   - [Core Components](#12-core-components)
+   - [Key Files and Their Purpose](#13-key-files-and-their-purpose)
+3. [Technology Stack Mapping](#2-technology-stack-mapping)
+   - [Direct Replacements](#21-direct-replacements)
+   - [Cloudflare Services Integration](#22-cloudflare-services-integration)
+   - [Recommended Go Libraries](#23-recommended-go-libraries)
+   - [Cloudflare R2 Configuration](#24-cloudflare-r2-configuration)
+   - [12-Factor App Compliance](#25-12-factor-app-compliance)
+4. [Detailed Migration Strategy](#3-detailed-migration-strategy)
+   - [Phase 1: Project Setup & Foundation](#31-phase-1-project-setup--foundation-week-1)
+   - [Phase 2: Core Services](#32-phase-2-core-services-week-1-2)
+   - [Phase 3: Repository Builder](#33-phase-3-repository-builder-week-2)
+   - [Phase 4: Task Queue Integration](#34-phase-4-task-queue-integration-week-2-3)
+   - [Phase 5: API Implementation](#35-phase-5-api-implementation-week-3)
+   - [Phase 6: Worker Implementation](#36-phase-6-worker-implementation-week-3)
+   - [Phase 7: Containerization](#37-phase-7-containerization-week-3-4)
+   - [Phase 8: Admin CLI Tools](#38-phase-8-admin-cli-tools-week-4)
+5. [Testing Strategy](#4-testing-strategy)
+   - [Unit Tests](#41-unit-tests)
+   - [Integration Tests](#42-integration-tests)
+   - [Performance Benchmarks](#43-performance-benchmarks)
+6. [Migration Checklist](#5-migration-checklist)
+   - [Pre-Migration](#51-pre-migration)
+   - [Implementation](#52-implementation)
+   - [Post-Migration](#53-post-migration)
+7. [Risk Mitigation](#6-risk-mitigation)
+   - [Technical Risks](#61-technical-risks)
+   - [Operational Risks](#62-operational-risks)
+8. [Performance Expectations](#7-performance-expectations)
+   - [Expected Improvements](#71-expected-improvements)
+   - [Optimization Opportunities](#72-optimization-opportunities)
+9. [Deployment Strategy](#8-deployment-strategy)
+   - [Blue-Green Deployment](#81-blue-green-deployment)
+   - [Rollback Plan](#82-rollback-plan)
+   - [CI/CD Pipeline with GitHub Actions](#83-cicd-pipeline-with-github-actions)
+   - [Release Automation with GoReleaser](#84-release-automation-with-goreleaser)
+10. [Documentation Requirements](#9-documentation-requirements)
+    - [Technical Documentation](#91-technical-documentation)
+    - [Developer Documentation](#92-developer-documentation)
+    - [Observability Strategy](#93-observability-strategy)
+11. [Success Criteria](#10-success-criteria)
+    - [Functional Requirements](#101-functional-requirements)
+    - [Non-Functional Requirements](#102-non-functional-requirements)
+    - [Quality Requirements](#103-quality-requirements)
+12. [Timeline Summary](#11-timeline-summary)
+13. [Next Steps](#12-next-steps)
+14. [Cloudflare Migration Benefits](#14-cloudflare-migration-benefits)
+    - [Cost Analysis](#141-cost-analysis)
+    - [Cloudflare R2 Advantages](#142-cloudflare-r2-advantages)
+    - [R2 Setup Instructions](#143-r2-setup-instructions)
+    - [R2 vs S3 Compatibility Matrix](#144-r2-vs-s3-compatibility-matrix)
+    - [Migration Checklist](#145-migration-checklist)
+    - [Future Cloudflare Integration Opportunities](#146-future-cloudflare-integration-opportunities)
+    - [Recommended Phased Approach](#147-recommended-phased-approach)
+    - [R2 Code Examples](#148-r2-code-examples)
+15. [Appendix](#15-appendix)
+    - [Useful Go Resources](#151-useful-go-resources)
+    - [Python vs Go Syntax Quick Reference](#152-python-vs-go-syntax-quick-reference)
+    - [Environment Variables Reference](#153-environment-variables-reference)
+
+---
+
 ## Executive Summary
 
 This document outlines a comprehensive plan to migrate the **No Package Left Behind (NPLB)** project from Python to Go, while transitioning from AWS services to **Cloudflare's infrastructure**. NPLB is a service that automatically generates Debian APT repositories from GitHub releases containing `.deb` packages, with support for asynchronous job processing, R2 storage (Cloudflare's S3-compatible object storage), and GPG signing.
@@ -172,6 +239,135 @@ cfg, err := config.LoadDefaultConfig(context.Background(),
 )
 ```
 
+### 2.5 12-Factor App Compliance
+
+NPLB's Go implementation follows the [12-Factor App](https://12factor.net/) methodology for building modern, cloud-native applications:
+
+#### I. Codebase
+**✅ Compliant**: Single Git repository tracked in version control with multiple deployment environments (dev, staging, production).
+
+```
+Repository: github.com/zjpiazza/nplb
+Branches: main (production), develop (staging), feature/* (development)
+```
+
+#### II. Dependencies
+**✅ Compliant**: All dependencies explicitly declared in `go.mod` with version pinning. No system-level dependencies assumed.
+
+```go
+// go.mod
+module github.com/zjpiazza/nplb
+
+go 1.21
+
+require (
+    github.com/gofiber/fiber/v2 v2.50.0
+    github.com/hibiken/asynq v0.24.1
+    // ... all dependencies versioned
+)
+```
+
+#### III. Config
+**✅ Compliant**: All configuration via environment variables, never committed to the repository. Uses Viper for flexible config sources.
+
+```go
+// Configuration loaded from environment variables
+// Supports .env files for local development
+// Secrets managed via GitHub Secrets / Cloudflare environment variables
+```
+
+#### IV. Backing Services
+**✅ Compliant**: All external services (R2, Redis, GitHub API) treated as attached resources, swappable via configuration.
+
+```go
+// Services are interfaces that can be swapped
+type StorageService interface {
+    UploadFile(ctx context.Context, path, key string) error
+}
+
+// R2, S3, or local filesystem - all implement same interface
+```
+
+#### V. Build, Release, Run
+**✅ Compliant**: Strict separation via CI/CD pipeline with immutable releases.
+
+```
+Build Stage:   go build → compile binaries → run tests
+Release Stage: Tag version → GoReleaser → GitHub Release
+Run Stage:     Pull image → deploy to environment → no code changes
+```
+
+#### VI. Processes
+**✅ Compliant**: Application runs as stateless processes. State stored in Redis/R2, not in-memory.
+
+```go
+// No sticky sessions
+// Workers can be scaled horizontally
+// API servers share no local state
+```
+
+#### VII. Port Binding
+**✅ Compliant**: Self-contained HTTP server exports services via port binding (no external web server needed).
+
+```go
+// Fiber app is fully self-contained
+app.Listen(fmt.Sprintf(":%d", cfg.ServerPort))
+```
+
+#### VIII. Concurrency
+**✅ Compliant**: Scales out via process model. Multiple API instances, multiple workers.
+
+```yaml
+# docker-compose.yml
+worker:
+  deploy:
+    replicas: 2  # Scale workers independently
+```
+
+#### IX. Disposability
+**✅ Compliant**: Fast startup (<1s), graceful shutdown with signal handling.
+
+```go
+// Graceful shutdown on SIGTERM/SIGINT
+quit := make(chan os.Signal, 1)
+signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+go func() {
+    <-quit
+    app.ShutdownWithTimeout(30 * time.Second)
+}()
+```
+
+#### X. Dev/Prod Parity
+**✅ Compliant**: Same Docker images across all environments, minimal configuration differences.
+
+```dockerfile
+# Same Dockerfile for dev, staging, production
+# Environment variables differentiate behavior
+# Same backing services (Redis, R2) in all environments
+```
+
+#### XI. Logs
+**✅ Compliant**: Structured logs to stdout, no file writing. Aggregation handled by platform.
+
+```go
+// All logs to stdout in JSON format
+logger, _ := zap.NewProduction()  // JSON logs
+logger.Info("message", zap.String("key", "value"))
+
+// Cloudflare Workers: Logs via Logpush
+// Docker: Logs via docker logs / logging driver
+```
+
+#### XII. Admin Processes
+**✅ Compliant**: One-off admin tasks via dedicated CLI commands in the same codebase.
+
+```bash
+# Admin CLI for one-off operations
+./nplb-admin verify-repo --owner=user --repo=project
+./nplb-admin cleanup-old-releases --days=90
+./nplb-admin rotate-gpg-key
+```
+
 ---
 
 ## 3. Detailed Migration Strategy
@@ -330,6 +526,373 @@ func (c *Config) StorageURL() string {
 
 func (c *Config) R2Endpoint() string {
     return fmt.Sprintf("https://%s.r2.cloudflarestorage.com", c.R2AccountID)
+}
+```
+
+#### 3.1.5 Environment Configuration Template
+
+Create comprehensive `.env.example` for all environments:
+
+```bash
+# .env.example - Template for all environments
+# Copy to .env and fill in actual values
+
+#==============================================================================
+# Application Configuration
+#==============================================================================
+APP_ENV=development          # development | staging | production
+APP_VERSION=0.1.0
+LOG_LEVEL=debug              # debug | info | warn | error
+LOG_FORMAT=console           # console | json
+
+#==============================================================================
+# Server Configuration
+#==============================================================================
+SERVER_HOST=0.0.0.0
+SERVER_PORT=8080
+READ_TIMEOUT=30s
+WRITE_TIMEOUT=30s
+SHUTDOWN_TIMEOUT=30s
+
+#==============================================================================
+# GitHub API Configuration
+#==============================================================================
+GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+#==============================================================================
+# Cloudflare R2 Storage Configuration
+#==============================================================================
+R2_ACCOUNT_ID=your-cloudflare-account-id
+R2_ACCESS_KEY_ID=your-r2-access-key-id
+R2_SECRET_ACCESS_KEY=your-r2-secret-access-key
+R2_BUCKET_NAME=nplb-repo
+R2_PUBLIC_URL=https://repo.example.com  # Optional: Custom domain for public access
+R2_REGION=auto                          # R2 uses 'auto' region
+
+#==============================================================================
+# Redis / Queue Configuration
+#==============================================================================
+REDIS_HOST=localhost
+REDIS_PORT=6379
+REDIS_PASSWORD=
+REDIS_DB=0
+REDIS_MAX_RETRIES=3
+REDIS_POOL_SIZE=10
+
+# Queue Configuration
+QUEUE_CONCURRENCY=10
+QUEUE_MAX_RETRY=3
+QUEUE_RETRY_DELAY=3s
+
+#==============================================================================
+# GPG Signing Configuration
+#==============================================================================
+GPG_HOME=keys
+GPG_KEY_EMAIL=repo@example.com
+GPG_PASSPHRASE=                         # Optional: GPG key passphrase
+
+#==============================================================================
+# Repository Generation Configuration
+#==============================================================================
+OUTPUT_DIR=build
+DEFAULT_CODENAME=stable
+DEFAULT_COMPONENT=main
+SUPPORTED_ARCHITECTURES=amd64,arm64
+
+#==============================================================================
+# Observability Configuration
+#==============================================================================
+ENABLE_METRICS=true
+METRICS_PORT=9090
+ENABLE_PPROF=false                      # Enable Go profiling endpoints
+PPROF_PORT=6060
+
+#==============================================================================
+# Feature Flags (Optional)
+#==============================================================================
+ENABLE_COMPRESSION=true                 # Enable gzip/xz compression
+ENABLE_GPG_SIGNING=true                 # Enable repository signing
+PARALLEL_DOWNLOADS=true                 # Download .deb files in parallel
+```
+
+**Environment-Specific Configurations:**
+
+```bash
+# .env.development
+APP_ENV=development
+LOG_LEVEL=debug
+LOG_FORMAT=console
+REDIS_HOST=localhost
+R2_PUBLIC_URL=https://dev-repo.example.com
+
+# .env.staging
+APP_ENV=staging
+LOG_LEVEL=info
+LOG_FORMAT=json
+REDIS_HOST=redis-staging
+R2_PUBLIC_URL=https://staging-repo.example.com
+
+# .env.production
+APP_ENV=production
+LOG_LEVEL=warn
+LOG_FORMAT=json
+REDIS_HOST=redis-production
+R2_PUBLIC_URL=https://repo.example.com
+ENABLE_PPROF=false
+```
+
+#### 3.1.6 Graceful Shutdown and Health Checks
+
+**Health Check Endpoints (`internal/api/handlers/health.go`):**
+
+```go
+package handlers
+
+import (
+    "context"
+    "time"
+    
+    "github.com/gofiber/fiber/v2"
+    "github.com/redis/go-redis/v9"
+    "go.uber.org/zap"
+)
+
+type HealthHandler struct {
+    redisClient *redis.Client
+    logger      *zap.Logger
+    startTime   time.Time
+    version     string
+}
+
+func NewHealthHandler(redisClient *redis.Client, logger *zap.Logger, version string) *HealthHandler {
+    return &HealthHandler{
+        redisClient: redisClient,
+        logger:      logger,
+        startTime:   time.Now(),
+        version:     version,
+    }
+}
+
+// Liveness probe - is the application running?
+func (h *HealthHandler) Liveness(c *fiber.Ctx) error {
+    return c.JSON(fiber.Map{
+        "status": "alive",
+        "timestamp": time.Now().Unix(),
+    })
+}
+
+// Readiness probe - is the application ready to serve traffic?
+func (h *HealthHandler) Readiness(c *fiber.Ctx) error {
+    ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+    defer cancel()
+    
+    // Check Redis connection
+    if err := h.redisClient.Ping(ctx).Err(); err != nil {
+        h.logger.Error("Redis health check failed", zap.Error(err))
+        return c.Status(503).JSON(fiber.Map{
+            "status": "not_ready",
+            "reason": "redis_unavailable",
+        })
+    }
+    
+    return c.JSON(fiber.Map{
+        "status": "ready",
+        "timestamp": time.Now().Unix(),
+    })
+}
+
+// Detailed health status with component checks
+func (h *HealthHandler) Health(c *fiber.Ctx) error {
+    ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+    defer cancel()
+    
+    health := fiber.Map{
+        "status":    "healthy",
+        "version":   h.version,
+        "uptime":    time.Since(h.startTime).Seconds(),
+        "timestamp": time.Now().Unix(),
+        "checks": fiber.Map{
+            "redis": "unknown",
+        },
+    }
+    
+    // Check Redis
+    if err := h.redisClient.Ping(ctx).Err(); err != nil {
+        health["checks"].(fiber.Map)["redis"] = "unhealthy"
+        health["status"] = "degraded"
+    } else {
+        health["checks"].(fiber.Map)["redis"] = "healthy"
+    }
+    
+    return c.JSON(health)
+}
+```
+
+**Graceful Shutdown for API Server (`cmd/api/main.go`):**
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+    "os"
+    "os/signal"
+    "syscall"
+    "time"
+    
+    "github.com/gofiber/fiber/v2"
+    "go.uber.org/zap"
+    
+    "github.com/zjpiazza/nplb/internal/api/handlers"
+    "github.com/zjpiazza/nplb/internal/api/routes"
+    "github.com/zjpiazza/nplb/internal/config"
+    "github.com/zjpiazza/nplb/internal/queue"
+)
+
+const version = "0.1.0" // Set by GoReleaser
+
+func main() {
+    // Load configuration
+    cfg, err := config.Load()
+    if err != nil {
+        log.Fatal("Failed to load config:", err)
+    }
+    
+    // Initialize logger
+    var logger *zap.Logger
+    if cfg.LogFormat == "json" {
+        logger, _ = zap.NewProduction()
+    } else {
+        logger, _ = zap.NewDevelopment()
+    }
+    defer logger.Sync()
+    
+    logger.Info("Starting NPLB API",
+        zap.String("version", version),
+        zap.String("environment", cfg.AppEnv),
+    )
+    
+    // Initialize queue client
+    queueClient := queue.NewClient(cfg)
+    defer queueClient.Close()
+    
+    // Initialize handlers
+    handler := handlers.NewHandler(queueClient, logger)
+    healthHandler := handlers.NewHealthHandler(redisClient, logger, version)
+    
+    // Setup Fiber app
+    app := fiber.New(fiber.Config{
+        AppName:      fmt.Sprintf("NPLB API v%s", version),
+        ReadTimeout:  30 * time.Second,
+        WriteTimeout: 30 * time.Second,
+    })
+    
+    // Health check endpoints
+    app.Get("/health", healthHandler.Health)
+    app.Get("/health/live", healthHandler.Liveness)
+    app.Get("/health/ready", healthHandler.Readiness)
+    
+    // Setup routes
+    routes.Setup(app, handler)
+    
+    // Start server in goroutine
+    addr := fmt.Sprintf("%s:%d", cfg.ServerHost, cfg.ServerPort)
+    go func() {
+        logger.Info("API server listening", zap.String("addr", addr))
+        if err := app.Listen(addr); err != nil {
+            logger.Fatal("Failed to start server", zap.Error(err))
+        }
+    }()
+    
+    // Setup graceful shutdown
+    quit := make(chan os.Signal, 1)
+    signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+    
+    <-quit
+    logger.Info("Shutting down server gracefully...")
+    
+    ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+    defer cancel()
+    
+    if err := app.ShutdownWithContext(ctx); err != nil {
+        logger.Error("Server forced to shutdown", zap.Error(err))
+    }
+    
+    logger.Info("Server stopped")
+}
+```
+
+**Graceful Shutdown for Worker (`cmd/worker/main.go`):**
+
+```go
+package main
+
+import (
+    "context"
+    "log"
+    "os"
+    "os/signal"
+    "syscall"
+    
+    "github.com/hibiken/asynq"
+    "go.uber.org/zap"
+    
+    "github.com/zjpiazza/nplb/internal/config"
+    "github.com/zjpiazza/nplb/internal/queue"
+    "github.com/zjpiazza/nplb/internal/tasks"
+)
+
+func main() {
+    // Load configuration
+    cfg, err := config.Load()
+    if err != nil {
+        log.Fatal("Failed to load config:", err)
+    }
+    
+    // Initialize logger
+    var logger *zap.Logger
+    if cfg.LogFormat == "json" {
+        logger, _ = zap.NewProduction()
+    } else {
+        logger, _ = zap.NewDevelopment()
+    }
+    defer logger.Sync()
+    
+    logger.Info("Starting NPLB Worker")
+    
+    // Initialize services (GitHub, R2, etc.)
+    // ... service initialization code ...
+    
+    // Create task handler
+    mux := asynq.NewServeMux()
+    mux.HandleFunc(tasks.TypeBuildRepository, func(ctx context.Context, t *asynq.Task) error {
+        return tasks.HandleBuildRepositoryTask(ctx, t, githubService, storageService, cfg, logger)
+    })
+    
+    // Initialize worker server
+    server := queue.NewServer(cfg)
+    
+    // Setup graceful shutdown
+    quit := make(chan os.Signal, 1)
+    signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+    
+    // Start worker in goroutine
+    go func() {
+        logger.Info("Worker started")
+        if err := server.Run(mux); err != nil {
+            logger.Fatal("Worker failed to start", zap.Error(err))
+        }
+    }()
+    
+    <-quit
+    logger.Info("Shutting down worker gracefully...")
+    
+    // Shutdown waits for running tasks to complete
+    server.Shutdown()
+    
+    logger.Info("Worker stopped")
 }
 ```
 
@@ -1193,6 +1756,331 @@ volumes:
 
 ---
 
+### 3.8 Phase 8: Admin CLI Tools (Week 4)
+
+#### 3.8.1 Admin CLI Structure
+
+Following 12-Factor principle XII (Admin Processes), create one-off administrative commands:
+
+```
+cmd/
+├── api/
+├── worker/
+└── admin/              # NEW: Admin CLI
+    └── main.go
+```
+
+#### 3.8.2 Admin CLI Implementation (`cmd/admin/main.go`)
+
+```go
+package main
+
+import (
+    "fmt"
+    "os"
+    
+    "github.com/spf13/cobra"
+    "go.uber.org/zap"
+    
+    "github.com/zjpiazza/nplb/internal/config"
+    "github.com/zjpiazza/nplb/internal/services/github"
+    "github.com/zjpiazza/nplb/internal/services/repository"
+    "github.com/zjpiazza/nplb/internal/services/storage"
+)
+
+var (
+    cfg    *config.Config
+    logger *zap.Logger
+)
+
+func main() {
+    var err error
+    
+    // Load configuration
+    cfg, err = config.Load()
+    if err != nil {
+        fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
+        os.Exit(1)
+    }
+    
+    // Initialize logger
+    logger, _ = zap.NewProduction()
+    defer logger.Sync()
+    
+    rootCmd := &cobra.Command{
+        Use:   "nplb-admin",
+        Short: "NPLB administrative commands",
+        Long:  "One-off administrative tasks for NPLB repository management",
+    }
+    
+    rootCmd.AddCommand(
+        verifyRepoCmd(),
+        cleanupCmd(),
+        rotateKeyCmd(),
+        rebuildCmd(),
+        listReleasesCmd(),
+        exportMetricsCmd(),
+    )
+    
+    if err := rootCmd.Execute(); err != nil {
+        fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+        os.Exit(1)
+    }
+}
+
+// Verify repository integrity
+func verifyRepoCmd() *cobra.Command {
+    var owner, repo string
+    
+    cmd := &cobra.Command{
+        Use:   "verify-repo",
+        Short: "Verify repository integrity and metadata",
+        RunE: func(cmd *cobra.Command, args []string) error {
+            logger.Info("Verifying repository",
+                zap.String("owner", owner),
+                zap.String("repo", repo),
+            )
+            
+            // Initialize services
+            storageService, err := storage.NewR2Service(
+                cfg.R2AccountID,
+                cfg.R2AccessKeyID,
+                cfg.R2SecretAccessKey,
+                cfg.R2BucketName,
+                logger,
+            )
+            if err != nil {
+                return fmt.Errorf("failed to create storage service: %w", err)
+            }
+            
+            // Check if Release file exists
+            // Verify GPG signatures
+            // Validate Packages files
+            // Check .deb file availability
+            
+            fmt.Println("✓ Repository structure valid")
+            fmt.Println("✓ GPG signatures valid")
+            fmt.Println("✓ All packages accessible")
+            
+            return nil
+        },
+    }
+    
+    cmd.Flags().StringVar(&owner, "owner", "", "GitHub repository owner (required)")
+    cmd.Flags().StringVar(&repo, "repo", "", "GitHub repository name (required)")
+    cmd.MarkFlagRequired("owner")
+    cmd.MarkFlagRequired("repo")
+    
+    return cmd
+}
+
+// Cleanup old releases
+func cleanupCmd() *cobra.Command {
+    var days int
+    var dryRun bool
+    
+    cmd := &cobra.Command{
+        Use:   "cleanup",
+        Short: "Remove old releases from R2 storage",
+        RunE: func(cmd *cobra.Command, args []string) error {
+            logger.Info("Cleaning up old releases",
+                zap.Int("days", days),
+                zap.Bool("dry_run", dryRun),
+            )
+            
+            // List all repositories in R2
+            // Find releases older than N days
+            // Delete old releases (if not dry-run)
+            
+            if dryRun {
+                fmt.Println("DRY RUN: Would delete 5 old releases")
+            } else {
+                fmt.Println("✓ Deleted 5 old releases")
+            }
+            
+            return nil
+        },
+    }
+    
+    cmd.Flags().IntVar(&days, "days", 90, "Delete releases older than N days")
+    cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show what would be deleted without deleting")
+    
+    return cmd
+}
+
+// Rotate GPG signing key
+func rotateKeyCmd() *cobra.Command {
+    var newKeyEmail, oldKeyEmail string
+    
+    cmd := &cobra.Command{
+        Use:   "rotate-key",
+        Short: "Rotate GPG signing key for repositories",
+        Long: `Rotate the GPG key used for signing repository metadata.
+This will re-sign all existing Release files with the new key.`,
+        RunE: func(cmd *cobra.Command, args []string) error {
+            logger.Info("Rotating GPG key",
+                zap.String("old_key", oldKeyEmail),
+                zap.String("new_key", newKeyEmail),
+            )
+            
+            // Export old public key
+            // Import new key
+            // Re-sign all Release files
+            // Update public key in repository
+            
+            fmt.Println("✓ GPG key rotated successfully")
+            fmt.Println("  Please distribute the new public key to users")
+            
+            return nil
+        },
+    }
+    
+    cmd.Flags().StringVar(&oldKeyEmail, "old-key", "", "Old GPG key email")
+    cmd.Flags().StringVar(&newKeyEmail, "new-key", "", "New GPG key email (required)")
+    cmd.MarkFlagRequired("new-key")
+    
+    return cmd
+}
+
+// Force rebuild a repository
+func rebuildCmd() *cobra.Command {
+    var owner, repo string
+    var limit int
+    
+    cmd := &cobra.Command{
+        Use:   "rebuild",
+        Short: "Force rebuild a repository without queueing",
+        RunE: func(cmd *cobra.Command, args []string) error {
+            logger.Info("Rebuilding repository",
+                zap.String("owner", owner),
+                zap.String("repo", repo),
+                zap.Int("limit", limit),
+            )
+            
+            // Initialize all services
+            githubService := github.NewService(cfg.GithubToken)
+            
+            storageService, err := storage.NewR2Service(
+                cfg.R2AccountID,
+                cfg.R2AccessKeyID,
+                cfg.R2SecretAccessKey,
+                cfg.R2BucketName,
+                logger,
+            )
+            if err != nil {
+                return fmt.Errorf("failed to create storage service: %w", err)
+            }
+            
+            repoService := repository.NewService(
+                fmt.Sprintf("%s/%s", owner, repo),
+                cfg.StorageURL(),
+                cfg.GPGHome,
+                cfg.GPGKeyEmail,
+                logger,
+            )
+            
+            // Execute rebuild synchronously
+            fmt.Println("Building repository...")
+            // ... build logic ...
+            
+            fmt.Println("✓ Repository rebuilt successfully")
+            
+            return nil
+        },
+    }
+    
+    cmd.Flags().StringVar(&owner, "owner", "", "GitHub repository owner (required)")
+    cmd.Flags().StringVar(&repo, "repo", "", "GitHub repository name (required)")
+    cmd.Flags().IntVar(&limit, "limit", 10, "Number of releases to include")
+    cmd.MarkFlagRequired("owner")
+    cmd.MarkFlagRequired("repo")
+    
+    return cmd
+}
+
+// List releases from GitHub
+func listReleasesCmd() *cobra.Command {
+    var owner, repo string
+    var limit int
+    
+    cmd := &cobra.Command{
+        Use:   "list-releases",
+        Short: "List releases from GitHub repository",
+        RunE: func(cmd *cobra.Command, args []string) error {
+            githubService := github.NewService(cfg.GithubToken)
+            
+            releases, err := githubService.GetReleases(cmd.Context(), owner, repo, limit)
+            if err != nil {
+                return fmt.Errorf("failed to fetch releases: %w", err)
+            }
+            
+            fmt.Printf("Found %d releases with .deb assets:\n\n", len(releases))
+            for i, release := range releases {
+                fmt.Printf("%d. %s (%s)\n", i+1, release.Name, release.TagName)
+                for _, asset := range release.Assets {
+                    fmt.Printf("   - %s (%d bytes)\n", asset.Name, asset.Size)
+                }
+                fmt.Println()
+            }
+            
+            return nil
+        },
+    }
+    
+    cmd.Flags().StringVar(&owner, "owner", "", "GitHub repository owner (required)")
+    cmd.Flags().StringVar(&repo, "repo", "", "GitHub repository name (required)")
+    cmd.Flags().IntVar(&limit, "limit", 10, "Number of releases to list")
+    cmd.MarkFlagRequired("owner")
+    cmd.MarkFlagRequired("repo")
+    
+    return cmd
+}
+
+// Export metrics (for debugging)
+func exportMetricsCmd() *cobra.Command {
+    cmd := &cobra.Command{
+        Use:   "export-metrics",
+        Short: "Export current metrics and statistics",
+        RunE: func(cmd *cobra.Command, args []string) error {
+            // Query Redis for job statistics
+            // Query R2 for storage usage
+            // Export to JSON
+            
+            fmt.Println("✓ Metrics exported to metrics.json")
+            
+            return nil
+        },
+    }
+    
+    return cmd
+}
+```
+
+#### 3.8.3 Admin CLI Usage Examples
+
+```bash
+# Verify repository integrity
+./nplb-admin verify-repo --owner=user --repo=project
+
+# List releases from GitHub
+./nplb-admin list-releases --owner=user --repo=project --limit=5
+
+# Cleanup old releases (dry run first)
+./nplb-admin cleanup --days=90 --dry-run
+./nplb-admin cleanup --days=90
+
+# Force rebuild without queue
+./nplb-admin rebuild --owner=user --repo=project --limit=10
+
+# Rotate GPG signing key
+./nplb-admin rotate-key --old-key=old@example.com --new-key=new@example.com
+
+# Export current metrics
+./nplb-admin export-metrics
+```
+
+---
+
 ## 4. Testing Strategy
 
 ### 4.1 Unit Tests
@@ -1243,6 +2131,11 @@ func BenchmarkRepositoryGeneration(b *testing.B) {
 
 ### 5.2 Implementation
 - [ ] **Phase 1:** Project setup and configuration (3 days)
+  - [ ] Initialize Go project structure
+  - [ ] Set up configuration management
+  - [ ] Create .env.example template
+  - [ ] Implement graceful shutdown
+  - [ ] Add health check endpoints
 - [ ] **Phase 2:** Core services implementation (5 days)
   - [ ] GitHub service
   - [ ] Storage service (Cloudflare R2)
@@ -1267,6 +2160,11 @@ func BenchmarkRepositoryGeneration(b *testing.B) {
   - [ ] Unit tests (>80% coverage)
   - [ ] Integration tests
   - [ ] Load testing
+- [ ] **Phase 8:** CI/CD and Admin Tools (3 days)
+  - [ ] GitHub Actions workflows
+  - [ ] GoReleaser configuration
+  - [ ] Admin CLI implementation
+  - [ ] Observability setup
 
 ### 5.3 Post-Migration
 - [ ] Performance benchmarking (Python vs Go)
@@ -1363,6 +2261,513 @@ If issues arise:
 3. Investigate and fix issues
 4. Retry deployment
 
+### 8.3 CI/CD Pipeline with GitHub Actions
+
+Following 12-Factor principle V (Build, Release, Run), implement automated CI/CD pipeline:
+
+#### 8.3.1 Continuous Integration Workflow
+
+Create `.github/workflows/ci.yml`:
+
+```yaml
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache: true
+      
+      - name: Download dependencies
+        run: go mod download
+      
+      - name: Verify dependencies
+        run: go mod verify
+      
+      - name: Run go vet
+        run: go vet ./...
+      
+      - name: Run go fmt
+        run: |
+          if [ "$(gofmt -s -l . | wc -l)" -gt 0 ]; then
+            echo "Please run 'go fmt' on your code"
+            gofmt -s -l .
+            exit 1
+          fi
+      
+      - name: Run tests
+        run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
+      
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./coverage.out
+          flags: unittests
+          name: codecov-nplb
+  
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache: true
+      
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v4
+        with:
+          version: latest
+          args: --timeout=5m
+  
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    needs: [test, lint]
+    
+    strategy:
+      matrix:
+        target:
+          - cmd/api
+          - cmd/worker
+          - cmd/admin
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache: true
+      
+      - name: Build binary
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -v \
+            -ldflags="-w -s -X main.version=${{ github.sha }}" \
+            -o ./bin/$(basename ${{ matrix.target }}) \
+            ./${{ matrix.target }}
+      
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: $(basename ${{ matrix.target }})-${{ github.sha }}
+          path: ./bin/$(basename ${{ matrix.target }})
+  
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Run Gosec Security Scanner
+        uses: securego/gosec@master
+        with:
+          args: ./...
+      
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+```
+
+#### 8.3.2 Docker Build and Push Workflow
+
+Create `.github/workflows/docker.yml`:
+
+```yaml
+name: Docker
+
+on:
+  push:
+    branches: [main, develop]
+    tags: ['v*']
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  docker:
+    name: Build and Push Docker Images
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha
+      
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./deployments/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            VERSION=${{ github.sha }}
+```
+
+### 8.4 Release Automation with GoReleaser
+
+#### 8.4.1 GoReleaser Configuration
+
+Create `.goreleaser.yml`:
+
+```yaml
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+    - go mod verify
+    - go test ./...
+
+builds:
+  - id: api
+    binary: nplb-api
+    main: ./cmd/api
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+    mod_timestamp: '{{ .CommitTimestamp }}'
+  
+  - id: worker
+    binary: nplb-worker
+    main: ./cmd/worker
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+    mod_timestamp: '{{ .CommitTimestamp }}'
+  
+  - id: admin
+    binary: nplb-admin
+    main: ./cmd/admin
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+    mod_timestamp: '{{ .CommitTimestamp }}'
+
+archives:
+  - id: default
+    format: tar.gz
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+    format_overrides:
+      - goos: windows
+        format: zip
+    files:
+      - README.md
+      - LICENSE
+      - deployments/docker-compose.yml
+
+checksum:
+  name_template: 'checksums.txt'
+
+snapshot:
+  name_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+      - '^ci:'
+  groups:
+    - title: 'Features'
+      regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
+      order: 0
+    - title: 'Bug Fixes'
+      regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
+      order: 1
+    - title: 'Performance Improvements'
+      regexp: '^.*?perf(\([[:word:]]+\))??!?:.+$'
+      order: 2
+    - title: 'Refactors'
+      regexp: '^.*?refactor(\([[:word:]]+\))??!?:.+$'
+      order: 3
+    - title: 'Other'
+      order: 999
+
+dockers:
+  - image_templates:
+      - 'ghcr.io/{{ .Env.GITHUB_REPOSITORY }}:{{ .Version }}-amd64'
+    use: buildx
+    dockerfile: deployments/Dockerfile
+    build_flag_templates:
+      - "--platform=linux/amd64"
+      - "--label=org.opencontainers.image.created={{.Date}}"
+      - "--label=org.opencontainers.image.title={{.ProjectName}}"
+      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+      - "--label=org.opencontainers.image.version={{.Version}}"
+  
+  - image_templates:
+      - 'ghcr.io/{{ .Env.GITHUB_REPOSITORY }}:{{ .Version }}-arm64'
+    use: buildx
+    goarch: arm64
+    dockerfile: deployments/Dockerfile
+    build_flag_templates:
+      - "--platform=linux/arm64"
+      - "--label=org.opencontainers.image.created={{.Date}}"
+      - "--label=org.opencontainers.image.title={{.ProjectName}}"
+      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+      - "--label=org.opencontainers.image.version={{.Version}}"
+
+docker_manifests:
+  - name_template: 'ghcr.io/{{ .Env.GITHUB_REPOSITORY }}:{{ .Version }}'
+    image_templates:
+      - 'ghcr.io/{{ .Env.GITHUB_REPOSITORY }}:{{ .Version }}-amd64'
+      - 'ghcr.io/{{ .Env.GITHUB_REPOSITORY }}:{{ .Version }}-arm64'
+  
+  - name_template: 'ghcr.io/{{ .Env.GITHUB_REPOSITORY }}:latest'
+    image_templates:
+      - 'ghcr.io/{{ .Env.GITHUB_REPOSITORY }}:{{ .Version }}-amd64'
+      - 'ghcr.io/{{ .Env.GITHUB_REPOSITORY }}:{{ .Version }}-arm64'
+
+release:
+  github:
+    owner: zjpiazza
+    name: nplb
+  draft: false
+  prerelease: auto
+  mode: append
+  header: |
+    ## NPLB Release {{ .Tag }}
+    
+    **Full Changelog**: https://github.com/zjpiazza/nplb/compare/{{ .PreviousTag }}...{{ .Tag }}
+  footer: |
+    ## Installation
+    
+    ### Docker
+    ```bash
+    docker pull ghcr.io/zjpiazza/nplb:{{ .Tag }}
+    ```
+    
+    ### Binary
+    Download the appropriate binary for your platform from the assets below.
+
+signs:
+  - cmd: gpg
+    args:
+      - "--batch"
+      - "--local-user"
+      - "{{ .Env.GPG_FINGERPRINT }}"
+      - "--output"
+      - "${signature}"
+      - "--detach-sign"
+      - "${artifact}"
+    artifacts: checksum
+```
+
+#### 8.4.2 Release Workflow
+
+Create `.github/workflows/release.yml`:
+
+```yaml
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  goreleaser:
+    name: Release with GoReleaser
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache: true
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Import GPG key
+        if: env.GPG_PRIVATE_KEY != ''
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          echo "$GPG_PRIVATE_KEY" | gpg --import --batch
+      
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v5
+        with:
+          distribution: goreleaser
+          version: latest
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GPG_FINGERPRINT: ${{ secrets.GPG_FINGERPRINT }}
+```
+
+#### 8.4.3 Release Process
+
+**Using Conventional Commits:**
+
+```bash
+# Feature commits
+git commit -m "feat: add support for multi-architecture .deb packages"
+git commit -m "feat(api): add health check endpoints"
+
+# Bug fix commits
+git commit -m "fix: resolve GPG signing timeout issue"
+git commit -m "fix(worker): prevent memory leak in repository builder"
+
+# Breaking changes
+git commit -m "feat!: change API response format
+
+BREAKING CHANGE: API now returns ISO 8601 timestamps instead of Unix timestamps"
+```
+
+**Creating a Release:**
+
+```bash
+# 1. Ensure you're on main branch
+git checkout main
+git pull
+
+# 2. Create and push a version tag
+git tag -a v1.2.0 -m "Release v1.2.0"
+git push origin v1.2.0
+
+# 3. GitHub Actions automatically:
+#    - Runs tests
+#    - Builds binaries for all platforms
+#    - Creates Docker images (multi-arch)
+#    - Generates changelog from commits
+#    - Creates GitHub release
+#    - Uploads all artifacts
+```
+
+**Version Bumping Guidelines:**
+
+```bash
+# Patch release (v1.2.3 -> v1.2.4): Bug fixes only
+git tag v1.2.4
+
+# Minor release (v1.2.3 -> v1.3.0): New features, backward compatible
+git tag v1.3.0
+
+# Major release (v1.2.3 -> v2.0.0): Breaking changes
+git tag v2.0.0
+```
+
 ---
 
 ## 9. Documentation Requirements
@@ -1379,6 +2784,356 @@ If issues arise:
 - [ ] Contribution guidelines
 - [ ] Code structure overview
 - [ ] Testing guide
+
+### 9.3 Observability Strategy
+
+Following 12-Factor principle XI (Logs), implement comprehensive observability using Cloudflare-native tools and Go best practices:
+
+#### 9.3.1 Logging Strategy
+
+**Structured Logging with Zap:**
+
+```go
+// Production: JSON logs to stdout
+logger, _ := zap.NewProduction()
+
+// Development: Human-readable logs
+logger, _ := zap.NewDevelopment()
+
+// Log with context
+logger.Info("Repository build started",
+    zap.String("owner", owner),
+    zap.String("repo", repo),
+    zap.String("job_id", jobID),
+    zap.Int("releases", count),
+)
+
+// Error logging with stack traces
+logger.Error("Failed to upload to R2",
+    zap.Error(err),
+    zap.String("file", filepath),
+    zap.String("key", key),
+)
+```
+
+**Log Levels by Environment:**
+
+```bash
+# Development
+LOG_LEVEL=debug
+LOG_FORMAT=console
+
+# Staging
+LOG_LEVEL=info
+LOG_FORMAT=json
+
+# Production
+LOG_LEVEL=warn
+LOG_FORMAT=json
+```
+
+**Request Logging Middleware:**
+
+```go
+// Fiber middleware for request logging
+app.Use(func(c *fiber.Ctx) error {
+    start := time.Now()
+    
+    // Add request ID to context
+    requestID := c.Get("X-Request-ID", uuid.New().String())
+    c.Locals("request_id", requestID)
+    
+    err := c.Next()
+    
+    logger.Info("HTTP request",
+        zap.String("request_id", requestID),
+        zap.String("method", c.Method()),
+        zap.String("path", c.Path()),
+        zap.Int("status", c.Response().StatusCode()),
+        zap.Duration("latency", time.Since(start)),
+        zap.String("ip", c.IP()),
+        zap.String("user_agent", c.Get("User-Agent")),
+    )
+    
+    return err
+})
+```
+
+#### 9.3.2 Metrics and Monitoring
+
+**Phase 1: Docker/Traditional Deployment**
+
+**Prometheus Metrics (Optional):**
+
+```go
+// internal/observability/metrics.go
+package observability
+
+import (
+    "github.com/prometheus/client_golang/prometheus"
+    "github.com/prometheus/client_golang/prometheus/promauto"
+)
+
+var (
+    // API metrics
+    httpRequestsTotal = promauto.NewCounterVec(
+        prometheus.CounterOpts{
+            Name: "nplb_http_requests_total",
+            Help: "Total number of HTTP requests",
+        },
+        []string{"method", "endpoint", "status"},
+    )
+    
+    httpRequestDuration = promauto.NewHistogramVec(
+        prometheus.HistogramOpts{
+            Name: "nplb_http_request_duration_seconds",
+            Help: "HTTP request duration in seconds",
+            Buckets: prometheus.DefBuckets,
+        },
+        []string{"method", "endpoint"},
+    )
+    
+    // Worker metrics
+    repositoryBuildsTotal = promauto.NewCounterVec(
+        prometheus.CounterOpts{
+            Name: "nplb_repository_builds_total",
+            Help: "Total number of repository builds",
+        },
+        []string{"status"},
+    )
+    
+    repositoryBuildDuration = promauto.NewHistogram(
+        prometheus.HistogramOpts{
+            Name: "nplb_repository_build_duration_seconds",
+            Help: "Repository build duration in seconds",
+            Buckets: []float64{1, 5, 10, 30, 60, 120, 300},
+        },
+    )
+    
+    // R2 metrics
+    r2UploadsTotal = promauto.NewCounterVec(
+        prometheus.CounterOpts{
+            Name: "nplb_r2_uploads_total",
+            Help: "Total number of R2 uploads",
+        },
+        []string{"status"},
+    )
+    
+    r2UploadBytes = promauto.NewCounter(
+        prometheus.CounterOpts{
+            Name: "nplb_r2_upload_bytes_total",
+            Help: "Total bytes uploaded to R2",
+        },
+    )
+)
+
+// Expose metrics endpoint
+import "github.com/gofiber/adaptor/v2"
+import "github.com/prometheus/client_golang/prometheus/promhttp"
+
+app.Get("/metrics", adaptor.HTTPHandler(promhttp.Handler()))
+```
+
+**Phase 2: Cloudflare Workers Deployment**
+
+**Native Cloudflare Analytics:**
+
+```javascript
+// Cloudflare Workers automatically track:
+// - Request count
+// - Error rate
+// - CPU time per execution
+// - Wall time per execution
+// - Subrequests
+// - Status codes
+
+// Access via Cloudflare Dashboard or GraphQL API
+export default {
+  async fetch(request, env, ctx) {
+    const start = Date.now();
+    
+    try {
+      const response = await handleRequest(request, env);
+      
+      // Custom metrics via Analytics Engine
+      env.ANALYTICS.writeDataPoint({
+        'blobs': ['repository_build'],
+        'doubles': [Date.now() - start],
+        'indexes': [env.ENVIRONMENT],
+      });
+      
+      return response;
+    } catch (error) {
+      // Errors automatically tracked
+      return new Response('Error', { status: 500 });
+    }
+  }
+}
+```
+
+**Cloudflare GraphQL API for Metrics:**
+
+```graphql
+query GetWorkerMetrics {
+  viewer {
+    accounts(filter: {accountTag: $accountTag}) {
+      workersInvocationsAdaptive(
+        filter: {
+          scriptName: $scriptName
+          datetime_geq: $start
+          datetime_leq: $end
+        }
+        limit: 10000
+      ) {
+        sum {
+          requests
+          errors
+          subrequests
+        }
+        quantiles {
+          cpuTimeP50
+          cpuTimeP99
+          wallTimeP50
+          wallTimeP99
+        }
+      }
+    }
+  }
+}
+```
+
+#### 9.3.3 Distributed Tracing (Optional)
+
+**OpenTelemetry Integration:**
+
+```go
+import (
+    "go.opentelemetry.io/otel"
+    "go.opentelemetry.io/otel/trace"
+)
+
+func (s *Service) BuildRepository(ctx context.Context, owner, repo string) error {
+    tracer := otel.Tracer("nplb")
+    ctx, span := tracer.Start(ctx, "build_repository")
+    defer span.End()
+    
+    span.SetAttributes(
+        attribute.String("repository.owner", owner),
+        attribute.String("repository.name", repo),
+    )
+    
+    // GitHub fetch
+    ctx, githubSpan := tracer.Start(ctx, "github.fetch_releases")
+    releases, err := s.github.GetReleases(ctx, owner, repo, limit)
+    githubSpan.End()
+    
+    // R2 upload
+    ctx, uploadSpan := tracer.Start(ctx, "r2.upload_repository")
+    err = s.storage.UploadDirectory(ctx, tempDir, repoPath)
+    uploadSpan.End()
+    
+    return nil
+}
+```
+
+#### 9.3.4 Error Tracking
+
+**Sentry Integration (Optional):**
+
+```go
+import "github.com/getsentry/sentry-go"
+
+// Initialize Sentry
+sentry.Init(sentry.ClientOptions{
+    Dsn: os.Getenv("SENTRY_DSN"),
+    Environment: os.Getenv("APP_ENV"),
+    Release: version,
+})
+
+// Capture errors
+if err != nil {
+    sentry.CaptureException(err)
+    logger.Error("Repository build failed", zap.Error(err))
+    return err
+}
+```
+
+#### 9.3.5 Key Metrics to Track
+
+| Metric | Description | Alert Threshold |
+|--------|-------------|-----------------|
+| **API Latency (P95)** | 95th percentile response time | > 500ms |
+| **Error Rate** | Percentage of failed requests | > 1% |
+| **Repository Build Success Rate** | Successful builds / total builds | < 95% |
+| **Repository Build Duration** | Time to build and upload | > 5 minutes |
+| **R2 Upload Success Rate** | Successful uploads / total uploads | < 99% |
+| **Queue Depth** | Number of pending jobs | > 100 |
+| **Worker CPU Usage** | CPU utilization per worker | > 80% |
+| **Memory Usage** | Memory consumption per instance | > 90% |
+
+#### 9.3.6 Dashboards and Alerts
+
+**Grafana Dashboard (if using Prometheus):**
+
+```yaml
+# Example panel configuration
+- title: API Request Rate
+  type: graph
+  targets:
+    - expr: rate(nplb_http_requests_total[5m])
+      legendFormat: "{{ method }} {{ endpoint }}"
+
+- title: Repository Build Duration
+  type: histogram
+  targets:
+    - expr: histogram_quantile(0.95, nplb_repository_build_duration_seconds)
+      legendFormat: "P95"
+```
+
+**Cloudflare Dashboard Access:**
+
+```bash
+# View metrics in Cloudflare Dashboard
+# Workers & Pages → Your Worker → Metrics
+
+# Or via wrangler CLI
+wrangler tail nplb-api --format=pretty
+
+# Or via GraphQL API for custom dashboards
+```
+
+#### 9.3.7 Log Aggregation
+
+**Phase 1: Docker Deployment**
+
+```yaml
+# docker-compose.yml with log driver
+services:
+  api:
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+        labels: "service,env"
+        tag: "{{.Name}}/{{.ID}}"
+```
+
+**Phase 2: Cloudflare Workers**
+
+```bash
+# Real-time logs via wrangler
+wrangler tail nplb-api
+
+# Logpush to external service (S3, R2, Google Cloud Storage)
+# Configure via Cloudflare Dashboard
+```
+
+**Centralized Logging Options:**
+- Cloudflare Logpush → R2 → Query with SQL
+- Docker logs → Loki → Grafana
+- Cloudwatch Logs (AWS)
+- Google Cloud Logging
 
 ---
 
@@ -1404,6 +3159,9 @@ If issues arise:
 - ✅ Zero critical security vulnerabilities
 - ✅ All integration tests passing
 - ✅ Load tests pass (1000 req/s sustained)
+- ✅ 12-Factor App compliance verified
+- ✅ CI/CD pipeline operational
+- ✅ Automated releases with GoReleaser
 
 ---
 
@@ -1411,15 +3169,16 @@ If issues arise:
 
 | Phase | Duration | Deliverables |
 |-------|----------|--------------|
-| **Phase 1: Setup** | 3 days | Project structure, config, dependencies |
+| **Phase 1: Setup** | 3 days | Project structure, config, dependencies, health checks |
 | **Phase 2: Core Services** | 5 days | GitHub, R2, Debian services |
 | **Phase 3: Repository Builder** | 5 days | Full repo generation logic |
 | **Phase 4: Queue Integration** | 3 days | Asynq tasks and workers |
 | **Phase 5: API** | 3 days | REST API with Fiber/Gin |
 | **Phase 6: Docker** | 2 days | Containerization |
 | **Phase 7: Testing** | 3 days | Unit + integration tests |
-| **Buffer** | 4 days | Bug fixes, optimization |
-| **TOTAL** | **~4 weeks** | Production-ready Go implementation |
+| **Phase 8: CI/CD & Admin** | 3 days | GitHub Actions, GoReleaser, admin CLI |
+| **Buffer** | 3 days | Bug fixes, optimization, documentation |
+| **TOTAL** | **~4 weeks** | Production-ready Go implementation with full automation |
 
 ---
 
@@ -1439,14 +3198,51 @@ If issues arise:
 
 ### 15.1 Useful Go Resources
 
+**Go Language & Best Practices:**
 - [Effective Go](https://golang.org/doc/effective_go)
 - [Go Proverbs](https://go-proverbs.github.io/)
+- [Go Code Review Comments](https://github.com/golang/go/wiki/CodeReviewComments)
+- [Uber Go Style Guide](https://github.com/uber-go/guide/blob/master/style.md)
+
+**Web Frameworks:**
 - [Fiber Documentation](https://docs.gofiber.io/)
+- [Gin Web Framework](https://gin-gonic.com/docs/)
+
+**Task Queue:**
 - [Asynq Documentation](https://github.com/hibiken/asynq)
+- [Asynq Web UI](https://github.com/hibiken/asynqmon)
+
+**AWS SDK & R2:**
 - [AWS SDK Go v2](https://aws.github.io/aws-sdk-go-v2/docs/)
 - [Cloudflare R2 Documentation](https://developers.cloudflare.com/r2/)
 - [Cloudflare R2 S3 API Compatibility](https://developers.cloudflare.com/r2/api/s3/api/)
+
+**Cloudflare Platform:**
 - [Cloudflare Workers Documentation](https://developers.cloudflare.com/workers/)
+- [Cloudflare Queues](https://developers.cloudflare.com/queues/)
+- [Cloudflare D1](https://developers.cloudflare.com/d1/)
+- [Cloudflare Workers Analytics](https://developers.cloudflare.com/workers/observability/metrics-and-analytics/)
+
+**CI/CD & Release Automation:**
+- [GitHub Actions Documentation](https://docs.github.com/en/actions)
+- [GoReleaser Documentation](https://goreleaser.com/)
+- [GoReleaser Quick Start](https://goreleaser.com/quick-start/)
+- [Conventional Commits](https://www.conventionalcommits.org/)
+
+**12-Factor App:**
+- [The Twelve-Factor App](https://12factor.net/)
+- [12-Factor Config](https://12factor.net/config)
+- [Beyond the 12-Factor App](https://www.oreilly.com/library/view/beyond-the-twelve-factor/9781492042631/)
+
+**Testing:**
+- [Go Testing Package](https://pkg.go.dev/testing)
+- [Testify - Testing Toolkit](https://github.com/stretchr/testify)
+- [gomock - Mocking Framework](https://github.com/golang/mock)
+
+**Observability:**
+- [Zap - Structured Logging](https://github.com/uber-go/zap)
+- [Prometheus Go Client](https://github.com/prometheus/client_golang)
+- [OpenTelemetry Go](https://opentelemetry.io/docs/instrumentation/go/)
 
 ### 15.2 Python vs Go Syntax Quick Reference
 
