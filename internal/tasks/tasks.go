@@ -3,11 +3,12 @@ package tasks
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
 	"github.com/hibiken/asynq"
-	// "github.com/zjpiazza/nplb/internal/config"
-	// "github.com/zjpiazza/nplb/internal/services/github"
-	// "github.com/zjpiazza/nplb/internal/services/storage"
+	"go.uber.org/zap"
+
+	"github.com/zjpiazza/nplb/internal/services/repository"
 )
 
 const (
@@ -17,9 +18,11 @@ const (
 
 // BuildRepositoryPayload is the payload for the build repository task.
 type BuildRepositoryPayload struct {
-	Owner string `json:"owner"`
-	Repo  string `json:"repo"`
-	Limit int    `json:"limit"`
+	Owner       string `json:"owner"`
+	Repo        string `json:"repo"`
+	Limit       int    `json:"limit"`
+	Component   string `json:"component,omitempty"`
+	Description string `json:"description,omitempty"`
 }
 
 // NewBuildRepositoryTask creates a new build repository task.
@@ -31,22 +34,63 @@ func NewBuildRepositoryTask(owner, repo string, limit int) (*asynq.Task, error) 
 	return asynq.NewTask(TypeBuildRepository, payload), nil
 }
 
+// TaskHandler handles async tasks.
+type TaskHandler struct {
+	builder *repository.Builder
+	logger  *zap.Logger
+}
+
+// NewTaskHandler creates a new task handler.
+func NewTaskHandler(builder *repository.Builder, logger *zap.Logger) *TaskHandler {
+	return &TaskHandler{
+		builder: builder,
+		logger:  logger,
+	}
+}
+
 // HandleBuildRepositoryTask handles the build repository task.
-func HandleBuildRepositoryTask(ctx context.Context, t *asynq.Task /*, githubService *github.Service, storageService *storage.Service, cfg *config.Config, logger *zap.Logger*/) error {
+func (h *TaskHandler) HandleBuildRepositoryTask(ctx context.Context, t *asynq.Task) error {
 	var p BuildRepositoryPayload
 	if err := json.Unmarshal(t.Payload(), &p); err != nil {
-		return err
+		return fmt.Errorf("failed to unmarshal payload: %w", err)
 	}
 
-	// logger.Info("Starting repository build", zap.String("owner", p.Owner), zap.String("repo", p.Repo))
+	h.logger.Info("starting repository build task",
+		zap.String("owner", p.Owner),
+		zap.String("repo", p.Repo),
+		zap.Int("limit", p.Limit),
+	)
 
-	// 1. Fetch releases from GitHub
-	// 2. Download .deb files
-	// 3. Parse .deb files
-	// 4. Generate repository metadata
-	// 5. Upload repository to R2
+	opts := repository.BuildOptions{
+		Owner:       p.Owner,
+		Repo:        p.Repo,
+		Limit:       p.Limit,
+		Component:   p.Component,
+		Description: p.Description,
+	}
 
-	// logger.Info("Finished repository build", zap.String("owner", p.Owner), zap.String("repo", p.Repo))
+	result, err := h.builder.Build(ctx, opts)
+	if err != nil {
+		h.logger.Error("repository build failed",
+			zap.String("owner", p.Owner),
+			zap.String("repo", p.Repo),
+			zap.Error(err),
+		)
+		return fmt.Errorf("build failed: %w", err)
+	}
+
+	h.logger.Info("repository build completed",
+		zap.String("owner", p.Owner),
+		zap.String("repo", p.Repo),
+		zap.Int("packages", result.PackagesBuilt),
+		zap.Strings("architectures", result.Architectures),
+		zap.String("url", result.RepoURL),
+	)
 
 	return nil
+}
+
+// RegisterHandlers registers all task handlers with the mux.
+func (h *TaskHandler) RegisterHandlers(mux *asynq.ServeMux) {
+	mux.HandleFunc(TypeBuildRepository, h.HandleBuildRepositoryTask)
 }

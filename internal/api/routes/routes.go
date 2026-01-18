@@ -6,7 +6,7 @@ import (
 )
 
 // Setup configures the routes for the application.
-func Setup(app *fiber.App, healthHandler *handlers.HealthHandler) {
+func Setup(app *fiber.App, healthHandler *handlers.HealthHandler, buildHandler *handlers.Handler) {
 	// Group API routes
 	api := app.Group("/api")
 
@@ -19,5 +19,7 @@ func Setup(app *fiber.App, healthHandler *handlers.HealthHandler) {
 	health.Get("/live", healthHandler.Liveness)
 	health.Get("/ready", healthHandler.Readiness)
 
-	// You can add more routes here as needed.
+	// Build endpoints
+	build := v1.Group("/build")
+	build.Post("/", buildHandler.CreateBuild)
 }

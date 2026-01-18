@@ -10,65 +10,104 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
-	// "github.com/zjpiazza/nplb/internal/api/handlers"
-	// "github.com/zjpiazza/nplb/internal/api/routes"
-	// "github.com/zjpiazza/nplb/internal/config"
-	// "github.com/zjpiazza/nplb/internal/queue"
+	"github.com/gofiber/fiber/v2/middleware/cors"
+	"github.com/gofiber/fiber/v2/middleware/logger"
+	"github.com/gofiber/fiber/v2/middleware/recover"
+	"github.com/redis/go-redis/v9"
+	"go.uber.org/zap"
+
+	"github.com/zjpiazza/nplb/internal/api/handlers"
+	"github.com/zjpiazza/nplb/internal/api/routes"
+	"github.com/zjpiazza/nplb/internal/config"
+	"github.com/zjpiazza/nplb/internal/queue"
 )
 
-const version = "0.1.0" // Set by GoReleaser
+const version = "0.1.0"
 
 func main() {
-	// TODO: Implement config loading
-	// cfg, err := config.Load()
-	// if err != nil {
-	// 	log.Fatal("Failed to load config:", err)
-	// }
+	// Load configuration
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatal("Failed to load config:", err)
+	}
 
-	// TODO: Initialize logger
-	// var logger *zap.Logger
-	// if cfg.LogFormat == "json" {
-	// 	logger, _ = zap.NewProduction()
-	// } else {
-	// 	logger, _ = zap.NewDevelopment()
-	// }
-	// defer logger.Sync()
+	// Initialize logger
+	var zapLogger *zap.Logger
+	if cfg.LogFormat == "json" {
+		zapLogger, _ = zap.NewProduction()
+	} else {
+		zapLogger, _ = zap.NewDevelopment()
+	}
+	defer zapLogger.Sync()
 
-	// logger.Info("Starting NPLB API",
-	// 	zap.String("version", version),
-	// 	zap.String("environment", cfg.AppEnv),
-	// )
+	zapLogger.Info("Starting NPLB API",
+		zap.String("version", version),
+		zap.String("environment", cfg.AppEnv),
+	)
 
-	// TODO: Initialize queue client
-	// queueClient := queue.NewClient(cfg)
-	// defer queueClient.Close()
+	// Initialize Redis client for health checks
+	redisClient := redis.NewClient(&redis.Options{
+		Addr:     cfg.RedisAddr,
+		Password: cfg.RedisPassword,
+		DB:       cfg.RedisDB,
+	})
 
-	// TODO: Initialize handlers
-	// handler := handlers.NewHandler(queueClient, logger)
-	// healthHandler := handlers.NewHealthHandler(redisClient, logger, version)
+	// Test Redis connection
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	if err := redisClient.Ping(ctx).Err(); err != nil {
+		zapLogger.Warn("Redis connection failed - health checks will report degraded",
+			zap.Error(err),
+		)
+	}
+	cancel()
+
+	// Initialize queue client (Cloudflare Queues)
+	var queueClient queue.Queue
+	if cfg.CloudflareAPIToken != "" {
+		queueClient, err = queue.NewClient(cfg)
+		if err != nil {
+			zapLogger.Warn("Failed to initialize Cloudflare Queue client",
+				zap.Error(err),
+			)
+		}
+	}
+
+	// If Cloudflare Queue is not available, use Asynq
+	if queueClient == nil {
+		zapLogger.Info("Using Asynq queue (Redis-based)")
+		queueClient = queue.NewAsynqClient(cfg.RedisAddr, cfg.RedisPassword, cfg.RedisDB)
+	}
+	defer queueClient.Close()
+
+	// Initialize handlers
+	healthHandler := handlers.NewHealthHandler(redisClient, zapLogger, version)
+	handler := handlers.NewHandler(queueClient, zapLogger)
 
 	// Setup Fiber app
 	app := fiber.New(fiber.Config{
-		AppName:      fmt.Sprintf("NPLB API v%s", version),
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
+		AppName:               fmt.Sprintf("NPLB API v%s", version),
+		ReadTimeout:           30 * time.Second,
+		WriteTimeout:          30 * time.Second,
+		DisableStartupMessage: cfg.IsProduction(),
 	})
 
-	// TODO: Add health check endpoints
-	// app.Get("/health", healthHandler.Health)
-	// app.Get("/health/live", healthHandler.Liveness)
-	// app.Get("/health/ready", healthHandler.Readiness)
+	// Add middleware
+	app.Use(recover.New())
+	app.Use(cors.New())
 
-	// TODO: Setup routes
-	// routes.Setup(app, handler)
+	if cfg.IsDevelopment() {
+		app.Use(logger.New())
+	}
+
+	// Setup routes
+	routes.Setup(app, healthHandler, handler)
 
 	// Start server in goroutine
-	// addr := fmt.Sprintf("%s:%d", cfg.ServerHost, cfg.ServerPort)
-	addr := ":8080" // Placeholder
+	addr := fmt.Sprintf("%s:%d", cfg.ServerHost, cfg.ServerPort)
 	go func() {
-		log.Println("API server listening on", addr)
+		zapLogger.Info("API server listening", zap.String("addr", addr))
 		if err := app.Listen(addr); err != nil {
-			log.Fatal("Failed to start server:", err)
+			zapLogger.Fatal("Failed to start server", zap.Error(err))
 		}
 	}()
 
@@ -77,14 +116,14 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
 	<-quit
-	log.Println("Shutting down server gracefully...")
+	zapLogger.Info("Shutting down server gracefully...")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel = context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	if err := app.ShutdownWithContext(ctx); err != nil {
-		log.Println("Server forced to shutdown:", err)
+		zapLogger.Error("Server forced to shutdown", zap.Error(err))
 	}
 
-	log.Println("Server stopped")
+	zapLogger.Info("Server stopped")
 }

@@ -22,8 +22,18 @@ type DebInfo struct {
 	Package      string `json:"package"`
 	Version      string `json:"version"`
 	Architecture string `json:"architecture"`
-	Depends      string `json:"depends"`
-	Description  string `json:"description"`
+	Maintainer   string `json:"maintainer,omitempty"`
+	Depends      string `json:"depends,omitempty"`
+	Description  string `json:"description,omitempty"`
+	Section      string `json:"section,omitempty"`
+	Priority     string `json:"priority,omitempty"`
+	Homepage     string `json:"homepage,omitempty"`
+
+	// File metadata (populated after parsing)
+	Filename string `json:"filename"`
+	Size     int64  `json:"size"`
+	MD5sum   string `json:"md5sum"`
+	SHA256   string `json:"sha256"`
 }
 
 // BuildRequest is the request body for the build endpoint.
@@ -38,4 +48,23 @@ type BuildResponse struct {
 	Status  string `json:"status"`
 	Message string `json:"message"`
 	JobID   string `json:"job_id"`
+}
+
+// JobStatus represents the status of a background job.
+type JobStatus struct {
+	ID        string     `json:"id"`
+	Status    string     `json:"status"` // pending, processing, completed, failed
+	Owner     string     `json:"owner"`
+	Repo      string     `json:"repo"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
+	Error     string     `json:"error,omitempty"`
+	Result    *JobResult `json:"result,omitempty"`
+}
+
+// JobResult contains the result of a completed build job.
+type JobResult struct {
+	PackagesBuilt int      `json:"packages_built"`
+	RepoURL       string   `json:"repo_url"`
+	Architectures []string `json:"architectures"`
 }

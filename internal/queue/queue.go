@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/hibiken/asynq"
 	"github.com/zjpiazza/nplb/internal/config"
 )
 
@@ -47,12 +48,17 @@ func NewClient(cfg *config.Config) (*CloudflareQueue, error) {
 }
 
 // Enqueue sends a message to the Cloudflare Queue via HTTP API.
-// Reference: https://developers.cloudflare.com/queues/configuration/configure-queues/
 func (q *CloudflareQueue) Enqueue(ctx context.Context, taskType string, payload interface{}) error {
-	// Construct the message payload
-	// The Cloudflare API expects a JSON body with a "body" field containing the message
+	// Construct the message payload with task type
 	message := map[string]interface{}{
-		"body": payload,
+		"messages": []map[string]interface{}{
+			{
+				"body": map[string]interface{}{
+					"task_type": taskType,
+					"payload":   payload,
+				},
+			},
+		},
 	}
 
 	// Marshal to JSON
@@ -62,7 +68,6 @@ func (q *CloudflareQueue) Enqueue(ctx context.Context, taskType string, payload 
 	}
 
 	// Construct the API endpoint
-	// POST /accounts/<account_id>/queues/<queue_id>/messages
 	url := fmt.Sprintf(
 		"https://api.cloudflare.com/client/v4/accounts/%s/queues/%s/messages",
 		q.accountID,
@@ -101,4 +106,66 @@ func (q *CloudflareQueue) Enqueue(ctx context.Context, taskType string, payload 
 // Close is a no-op for HTTP-based client.
 func (q *CloudflareQueue) Close() error {
 	return nil
+}
+
+// AsynqQueue provides a client for interacting with Asynq (Redis-based queue).
+type AsynqQueue struct {
+	client *asynq.Client
+}
+
+// NewAsynqClient creates a new Asynq queue client.
+func NewAsynqClient(redisAddr, redisPassword string, redisDB int) *AsynqQueue {
+	client := asynq.NewClient(asynq.RedisClientOpt{
+		Addr:     redisAddr,
+		Password: redisPassword,
+		DB:       redisDB,
+	})
+
+	return &AsynqQueue{
+		client: client,
+	}
+}
+
+// Enqueue sends a task to the Asynq queue.
+func (q *AsynqQueue) Enqueue(ctx context.Context, taskType string, payload interface{}) error {
+	jsonPayload, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal payload: %w", err)
+	}
+
+	task := asynq.NewTask(taskType, jsonPayload)
+	_, err = q.client.EnqueueContext(ctx, task)
+	if err != nil {
+		return fmt.Errorf("failed to enqueue task: %w", err)
+	}
+
+	return nil
+}
+
+// Close closes the Asynq client connection.
+func (q *AsynqQueue) Close() error {
+	return q.client.Close()
+}
+
+// NewAsynqServer creates a new Asynq server for processing tasks.
+func NewAsynqServer(redisAddr, redisPassword string, redisDB int, concurrency int) *asynq.Server {
+	if concurrency <= 0 {
+		concurrency = 10
+	}
+
+	return asynq.NewServer(
+		asynq.RedisClientOpt{
+			Addr:     redisAddr,
+			Password: redisPassword,
+			DB:       redisDB,
+		},
+		asynq.Config{
+			Concurrency: concurrency,
+			Queues: map[string]int{
+				"default":  6,
+				"critical": 3,
+				"low":      1,
+			},
+		},
+	)
 }
